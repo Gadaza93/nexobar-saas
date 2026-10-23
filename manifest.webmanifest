@@ -1,0 +1,10 @@
+{
+  "name": "NexoBar · POS Inteligente para Bares",
+  "short_name": "NexoBar",
+  "description": "POS Inteligente para Bares con funcionamiento local y sin conexión.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#181A20",
+  "theme_color": "#12141A",
+  "lang": "es-CO"
+}
