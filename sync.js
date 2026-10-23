@@ -497,6 +497,312 @@ async function syncAll(options = {}) {
 
 const syncData = syncAll;
 
+// 5. Descarga e hidratación completa desde Supabase (Initial Pull / Hydration)
+async function pullAllFromSupabase(businessId) {
+  const sb = getClient();
+  if (!sb) {
+    console.warn("[NexoSync] pullAllFromSupabase: Cliente Supabase no inicializado.");
+    return { ok: false, error: "Cliente no inicializado" };
+  }
+  const bId = businessId || getBusinessId() || DEFAULT_BUSINESS_ID;
+  console.log(`[NexoSync] 📥 Iniciando descarga (pull) desde Supabase para negocio: '${bId}'...`);
+  updateIndicator("syncing");
+
+  const results = {
+    negocios: 0,
+    productos: 0,
+    ventas: 0,
+    gastos: 0,
+    proveedores: 0,
+    mermas: 0
+  };
+
+  try {
+    // 1. Negocios
+    try {
+      const { data: negData, error: negErr } = await sb.from("negocios").select("*").eq("id", bId).maybeSingle();
+      if (!negErr && negData) {
+        if (typeof state !== "undefined" && state) {
+          state.profile = {
+            ...state.profile,
+            ...(negData.configuracion || {}),
+            name: negData.nombre || state.profile?.name || "NexoBar",
+            phone: negData.telefono || state.profile?.phone || "",
+            syncId: bId,
+            sync_status: "synced"
+          };
+          results.negocios = 1;
+        }
+      }
+    } catch (e) {
+      console.warn("[NexoSync] Error descargando negocio:", e.message);
+    }
+
+    // 2. Productos
+    try {
+      const { data: prodData, error: prodErr } = await sb.from("productos").select("*").eq("business_id", bId);
+      if (!prodErr && Array.isArray(prodData) && prodData.length > 0) {
+        if (typeof state !== "undefined" && state) {
+          if (!Array.isArray(state.products)) state.products = [];
+          if (!Array.isArray(state.inventory)) state.inventory = [];
+          if (!Array.isArray(state.categories)) state.categories = [];
+
+          // Detectar si la base local tiene únicamente productos demo sin transacciones
+          const isVirginDemo = state.products.length > 0 &&
+            state.products.every(p => p.id && String(p.id).startsWith("p") && 4 > String(p.id).length) &&
+            (!state.payments || state.payments.length === 0) &&
+            (!state.purchases || state.purchases.length === 0);
+
+          if (isVirginDemo) {
+            state.products = [];
+            state.inventory = [];
+          }
+
+          prodData.forEach(p => {
+            const currentStock = Number(p.stock ?? 0);
+            const invId = `stock-${p.id}`;
+            const existingProd = state.products.find(x => x.id === p.id);
+
+            if (existingProd) {
+              existingProd.name = p.nombre || existingProd.name;
+              existingProd.category = p.categoria || existingProd.category;
+              existingProd.price = Number(p.precio ?? existingProd.price ?? 0);
+              existingProd.cost = Number(p.costo ?? existingProd.cost ?? 0);
+              existingProd.stock = currentStock;
+              existingProd.active = p.activo !== false;
+              existingProd.updated_at = toIsoDate(p.updated_at);
+              existingProd.sync_status = "synced";
+            } else {
+              state.products.push({
+                id: String(p.id),
+                name: p.nombre || "Producto",
+                category: p.categoria || "Otros",
+                price: Number(p.precio ?? 0),
+                cost: Number(p.costo ?? 0),
+                stock: currentStock,
+                icon: "🍺",
+                image: null,
+                inventoryId: invId,
+                recipe: { [invId]: 1 },
+                active: p.activo !== false,
+                createdAt: toIsoDate(p.created_at),
+                created_at: toIsoDate(p.created_at),
+                updated_at: toIsoDate(p.updated_at),
+                sync_status: "synced"
+              });
+            }
+
+            // Sincronizar insumo de inventario local correspondiente
+            let invItem = state.inventory.find(i => i.id === invId || i.id === existingProd?.inventoryId);
+            if (invItem) {
+              invItem.name = p.nombre || invItem.name;
+              invItem.qty = currentStock;
+              invItem.min = Number(p.min_stock ?? invItem.min ?? 5);
+            } else {
+              state.inventory.push({
+                id: invId,
+                name: p.nombre || "Producto",
+                unit: "und",
+                qty: currentStock,
+                min: Number(p.min_stock ?? 5)
+              });
+            }
+
+            if (p.categoria && !state.categories.includes(p.categoria)) {
+              state.categories.push(p.categoria);
+            }
+          });
+          results.productos = prodData.length;
+        }
+      }
+    } catch (e) {
+      console.warn("[NexoSync] Error descargando productos:", e.message);
+    }
+
+    // 3. Ventas
+    try {
+      const { data: salesData, error: salesErr } = await sb.from("ventas").select("*").eq("business_id", bId);
+      if (!salesErr && Array.isArray(salesData) && salesData.length > 0) {
+        if (typeof state !== "undefined" && state) {
+          if (!Array.isArray(state.payments)) state.payments = [];
+          salesData.forEach(v => {
+            const existingSale = state.payments.find(p => p.id === v.id);
+            if (!existingSale) {
+              const parsedDate = v.fecha ? String(v.fecha).slice(0, 10) : (typeof today === "function" ? today() : new Date().toISOString().slice(0, 10));
+              state.payments.push({
+                id: String(v.id),
+                orderId: String(v.order_id || v.id),
+                amount: Number(v.total ?? 0),
+                method: v.method || "Efectivo",
+                payments: Array.isArray(v.payments) ? v.payments : [],
+                items: Array.isArray(v.items) ? v.items : [],
+                customer: v.customer || "",
+                cashierName: v.cashier || "",
+                shiftId: String(v.shift_id || ""),
+                date: parsedDate,
+                paidAt: new Date(v.created_at || v.fecha || Date.now()).getTime(),
+                createdAt: new Date(v.created_at || v.fecha || Date.now()).getTime(),
+                created_at: toIsoDate(v.created_at || v.fecha),
+                updated_at: toIsoDate(v.updated_at),
+                sync_status: "synced"
+              });
+            }
+          });
+          results.ventas = salesData.length;
+        }
+      }
+    } catch (e) {
+      console.warn("[NexoSync] Error descargando ventas:", e.message);
+    }
+
+    // 4. Gastos / Compras
+    try {
+      const { data: gastosData, error: gastosErr } = await sb.from("gastos").select("*").eq("business_id", bId);
+      if (!gastosErr && Array.isArray(gastosData) && gastosData.length > 0) {
+        if (typeof state !== "undefined" && state) {
+          if (!Array.isArray(state.expenses)) state.expenses = [];
+          if (!Array.isArray(state.purchases)) state.purchases = [];
+
+          gastosData.forEach(g => {
+            const isPurchase = Boolean(g.proveedor_id || String(g.id).startsWith("pur-") || String(g.categoria).startsWith("Compra"));
+            const parsedDate = g.fecha ? String(g.fecha).slice(0, 10) : (typeof today === "function" ? today() : new Date().toISOString().slice(0, 10));
+
+            if (isPurchase) {
+              if (!state.purchases.some(p => p.id === g.id)) {
+                state.purchases.push({
+                  id: String(g.id),
+                  invoice: String(g.comprobante || ""),
+                  supplier: String(g.descripcion || "Proveedor"),
+                  supplierId: g.proveedor_id ? String(g.proveedor_id) : null,
+                  date: parsedDate,
+                  method: "Efectivo",
+                  lines: [],
+                  total: Number(g.monto ?? 0),
+                  createdAt: new Date(g.created_at || g.fecha || Date.now()).getTime(),
+                  created_at: toIsoDate(g.created_at || g.fecha),
+                  updated_at: toIsoDate(g.updated_at),
+                  sync_status: "synced"
+                });
+              }
+            } else {
+              if (!state.expenses.some(e => e.id === g.id)) {
+                state.expenses.push({
+                  id: String(g.id),
+                  category: String(g.categoria || "Gasto operativo"),
+                  description: String(g.descripcion || "Gasto registrado"),
+                  amount: Number(g.monto ?? 0),
+                  method: "Efectivo",
+                  date: parsedDate,
+                  createdAt: new Date(g.created_at || g.fecha || Date.now()).getTime(),
+                  created_at: toIsoDate(g.created_at || g.fecha),
+                  updated_at: toIsoDate(g.updated_at),
+                  sync_status: "synced"
+                });
+              }
+            }
+          });
+          results.gastos = gastosData.length;
+        }
+      }
+    } catch (e) {
+      console.warn("[NexoSync] Error descargando gastos:", e.message);
+    }
+
+    // 5. Proveedores
+    try {
+      const { data: provData, error: provErr } = await sb.from("proveedores").select("*").eq("business_id", bId);
+      if (!provErr && Array.isArray(provData) && provData.length > 0) {
+        if (typeof state !== "undefined" && state) {
+          if (!Array.isArray(state.suppliers)) state.suppliers = [];
+          provData.forEach(s => {
+            const existing = state.suppliers.find(x => x.id === s.id);
+            if (existing) {
+              existing.name = s.nombre || existing.name;
+              existing.phone = s.telefono || existing.phone;
+              existing.nit = s.contacto || existing.nit;
+              existing.address = s.direccion || existing.address;
+              existing.notes = s.notas || existing.notes;
+              existing.email = s.email || existing.email;
+              existing.sync_status = "synced";
+            } else {
+              state.suppliers.push({
+                id: String(s.id),
+                name: s.nombre || "Proveedor",
+                phone: s.telefono || "",
+                nit: s.contacto || "",
+                address: s.direccion || "",
+                notes: s.notas || "",
+                email: s.email || "",
+                createdAt: toIsoDate(s.created_at),
+                created_at: toIsoDate(s.created_at),
+                updated_at: toIsoDate(s.updated_at),
+                sync_status: "synced"
+              });
+            }
+          });
+          results.proveedores = provData.length;
+        }
+      }
+    } catch (e) {
+      console.warn("[NexoSync] Error descargando proveedores:", e.message);
+    }
+
+    // 6. Mermas
+    try {
+      const { data: mermaData, error: mermaErr } = await sb.from("mermas").select("*").eq("business_id", bId);
+      if (!mermaErr && Array.isArray(mermaData) && mermaData.length > 0) {
+        if (typeof state !== "undefined" && state) {
+          if (!Array.isArray(state.stockLog)) state.stockLog = [];
+          mermaData.forEach(m => {
+            if (!state.stockLog.some(l => l.id === m.id)) {
+              const parsedDate = m.fecha ? String(m.fecha).slice(0, 10) : (typeof today === "function" ? today() : new Date().toISOString().slice(0, 10));
+              state.stockLog.push({
+                id: String(m.id),
+                at: new Date(m.fecha || m.created_at || Date.now()).getTime(),
+                date: parsedDate,
+                type: "merma",
+                reasonCategory: m.motivo || "Rotura / Merma",
+                reason: m.motivo || "Rotura / Merma",
+                itemId: String(m.producto_id || ""),
+                itemName: String(m.producto_nombre || "Producto"),
+                delta: -Math.abs(Number(m.cantidad || 1)),
+                note: String(m.observacion || ""),
+                sync_status: "synced"
+              });
+            }
+          });
+          results.mermas = mermaData.length;
+        }
+      }
+    } catch (e) {
+      console.warn("[NexoSync] Error descargando mermas:", e.message);
+    }
+
+    // Persistir estado en IndexedDB / localStorage inmediatamente
+    if (typeof scheduleSave === "function") scheduleSave();
+    if (typeof persistNow === "function") {
+      try { await persistNow(); } catch (e) { /* ignore */ }
+    }
+
+    syncState.lastSyncAt = Date.now();
+    syncState.lastError = null;
+    updateIndicator("synced");
+
+    const totalCount = results.negocios + results.productos + results.ventas + results.gastos + results.proveedores + results.mermas;
+    console.log(`[NexoSync] 📥 Descarga completada: ${totalCount} registros procesados.`, results);
+
+    if (typeof renderAll === "function") {
+      try { renderAll(); } catch (e) { /* ignore */ }
+    }
+
+    return { ok: true, count: totalCount, details: results };
+  } catch (err) {
+    console.error("[NexoSync] Error en pullAllFromSupabase:", err);
+    updateIndicator("offline");
+    return { ok: false, error: err.message };
+  }
+}
+
 function setupRealtime() {
   const sb = getClient();
   if (!sb || typeof sb.channel !== "function") return;
@@ -567,15 +873,59 @@ function init() {
   }
 
   if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
-    document.addEventListener("click", (e) => {
+    document.addEventListener("click", async (e) => {
       if (e.target.closest("#syncStatusIndicator") || e.target.closest("#syncBadgeTopbar")) {
         e.preventDefault();
         if (typeof showToast === "function") {
-          showToast("Comprobando conexión con Supabase...");
+          showToast("Comprobando conexión y sincronizando...");
         }
         checkInitialConnection().then(ok => {
-          if (ok) syncAll({ force: true });
+          if (ok) {
+            pullAllFromSupabase().then(() => {
+              syncAll({ force: true });
+            });
+          }
         });
+      }
+      if (e.target.closest("#pullFromCloudButton") || e.target.closest("#sidebarPullButton")) {
+        e.preventDefault();
+        const btn = e.target.closest("button");
+        if (btn) btn.disabled = true;
+        if (typeof showToast === "function") {
+          showToast("Descargando datos desde Supabase...");
+        }
+        try {
+          const res = await pullAllFromSupabase();
+          if (res?.ok) {
+            if (typeof showToast === "function") {
+              showToast(`✅ Descarga completada: ${res.count} registros.`);
+            }
+            const statusEl = document.querySelector("#cloudSyncStatus");
+            if (statusEl) {
+              statusEl.textContent = `Última descarga: ${new Date().toLocaleTimeString("es-CO")} (${res.count} registros sincronizados).`;
+            }
+          } else {
+            if (typeof showToast === "function") {
+              showToast("⚠️ Error al descargar: " + (res?.error || "Revisa tu conexión"));
+            }
+          }
+        } catch (err) {
+          if (typeof showToast === "function") {
+            showToast("Error en descarga: " + err.message);
+          }
+        } finally {
+          if (btn) btn.disabled = false;
+        }
+      }
+      if (e.target.closest("#syncNowButton")) {
+        e.preventDefault();
+        if (typeof showToast === "function") {
+          showToast("Sincronizando con Supabase...");
+        }
+        await syncAll({ force: true });
+        if (typeof showToast === "function") {
+          showToast("✅ Sincronización completada.");
+        }
       }
     });
   }
@@ -615,6 +965,7 @@ rootScope.NexoSync = {
   syncAll,
   syncData,
   syncProductos,
+  pullAllFromSupabase,
   scheduleSync,
   checkInitialConnection,
   toIsoDate,

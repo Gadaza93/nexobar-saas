@@ -1195,8 +1195,37 @@ async function bootstrap() {
     document.body.insertAdjacentHTML('afterbegin', `<div class="fatal-error"><strong>No se pudo abrir la base de datos.</strong><br>Cierra otras ventanas de la app y recarga. Tus datos no se modificaron. (${escapeHtml(String(error.message || error))})</div>`);
     return;
   }
-  state = normalizeState(saved || defaultState); storageReady = true; scheduleSave();
-  try { renderAll(); initModules(); startBackupSchedule(); if (globalThis.NexoSync?.init) globalThis.NexoSync.init(); setInterval(() => { if (document.visibilityState === 'visible' && !document.querySelector('dialog[open]')) renderTables(); }, 60000); }
+
+  const isFreshLocal = !saved || (
+    (!saved.payments || saved.payments.length === 0) &&
+    (!saved.purchases || saved.purchases.length === 0) &&
+    (!saved.expenses || saved.expenses.length === 0) &&
+    (!saved.products || saved.products.length === 0 || (saved.products.length <= 12 && saved.products[0]?.id === 'p1'))
+  );
+
+  state = normalizeState(saved || defaultState);
+  storageReady = true;
+  scheduleSave();
+
+  // Si la base local está vacía o es la instalación por defecto, intentar hidratar desde Supabase
+  if (isFreshLocal && typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase) {
+    try {
+      const pullRes = await globalThis.NexoSync.pullAllFromSupabase();
+      if (pullRes && pullRes.ok && pullRes.count > 0) {
+        console.log(`[NexoSync] Base local hidratada con éxito desde Supabase: ${pullRes.count} registros.`);
+      }
+    } catch (e) {
+      console.warn('[NexoSync] No se pudo descargar datos iniciales de Supabase:', e);
+    }
+  }
+
+  try {
+    renderAll();
+    initModules();
+    startBackupSchedule();
+    if (globalThis.NexoSync?.init) globalThis.NexoSync.init();
+    setInterval(() => { if (document.visibilityState === 'visible' && !document.querySelector('dialog[open]')) renderTables(); }, 60000);
+  }
   catch (error) {
     console.error(error);
     document.body.insertAdjacentHTML('afterbegin', `<div class="fatal-error"><strong>La app tuvo un error al iniciar.</strong> Tus datos están a salvo; descarga un respaldo y avísanos. (${escapeHtml(String(error.message || error))})</div>`);

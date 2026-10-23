@@ -29,6 +29,7 @@
         </nav>
         <div class="side-bottom">
           <div class="sync-state is-offline" id="syncStatusIndicator" title="Estado de sincronización en la nube (Click para forzar)"><span class="dot" id="syncDot"></span><span id="syncLabel">Modo Offline</span></div>
+          <button id="sidebarPullButton" class="text-button" type="button" title="Descargar datos de la nube / Restaurar">☁️ Descargar de la nube</button>
           <button id="shiftStatusButton" class="shift-control">Caja cerrada · Abrir turno</button>
           <button id="exportButton" class="text-button" data-perm="backup">Exportar respaldo</button>
           <label class="text-button import-label" data-perm="backup">Importar respaldo<input id="importInput" type="file" accept="application/json" hidden /></label>
@@ -121,6 +122,15 @@
             <article class="data-card profile-card"><div id="profileImagePreview" class="profile-image-preview">N</div><label class="outline-button file-button">Cambiar logo del ticket<input id="businessImage" type="file" accept="image/*" hidden /></label><p class="muted center">Logotipo exclusivo para comprobantes y facturas impresas.</p></article>
             <article class="data-card profile-form"><label class="field-label" for="businessName">Nombre del establecimiento</label><input id="businessName" type="text" placeholder="Ej. NexoBar" /><label class="field-label" for="businessNit">NIT / RUT</label><input id="businessNit" type="text" placeholder="Ej. 900.000.000-1" /><label class="field-label" for="businessAddress">Dirección</label><input id="businessAddress" type="text" placeholder="Ej. Carrera 00 # 00-00" /><div class="two-fields"><div><label class="field-label" for="businessPhone">Número celular del local</label><input id="businessPhone" type="tel" placeholder="Ej. 300 000 0000" /></div><div><label class="field-label" for="businessOwnerPhone">Teléfono del Administrador / Dueño (WhatsApp)</label><input id="businessOwnerPhone" type="tel" placeholder="Ej. +57 300 123 4567" /></div></div><label class="field-label" for="businessSyncId">Identificador de sincronización en la nube (ID de Negocio)</label><input id="businessSyncId" type="text" placeholder="nexobar_default" /><button id="saveProfileButton" class="primary-button">Guardar información</button></article>
           </div>
+          <article class="data-card backup-card" id="cloudSyncCard">
+            <h3>Sincronización en la nube (Supabase)</h3>
+            <p class="muted">Conecta tu negocio en la nube para usar NexoBar desde múltiples dispositivos (computador, celular, tablet o acceso web). Puedes descargar todos tus datos existentes o forzar la subida de cambios.</p>
+            <div class="backup-actions">
+              <button id="pullFromCloudButton" class="primary-button" type="button">☁️ Descargar datos de la nube / Restaurar</button>
+              <button id="syncNowButton" class="outline-button" type="button">🔄 Sincronizar todo ahora</button>
+            </div>
+            <p id="cloudSyncStatus" class="muted" style="margin-top:0.4rem;font-size:0.85rem;"></p>
+          </article>
           <article class="data-card backup-card" data-perm="backup">
             <h3>Respaldos de la base de datos</h3>
             <p class="muted">Se guarda una copia completa de todo (ventas, inventario, usuarios, bitácora). Para restaurarla usa «Importar respaldo».</p>
