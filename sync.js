@@ -110,19 +110,29 @@ function sanitizeProducto(p, bId) {
 }
 
 function sanitizeVenta(p, bId) {
+  const pays = Array.isArray(p.payments) ? p.payments : [];
+  const itemsList = Array.isArray(p.items) ? p.items : [];
+  const primaryMethod = p.method || (pays.length > 0 ? pays.map(x => x.method).join(" + ") : "Efectivo");
+  const cashierStr = String(p.cashierName || p.cashier || "");
+  const orderIdStr = String(p.orderId || p.order_id || p.id);
+  const shiftIdStr = String(p.shiftId || p.shift_id || "");
+  const dateIso = toIsoDate(p.paidAt || p.createdAt || p.date || p.fecha);
+
   return {
     id: String(p.id || `pay_${Date.now()}`),
     business_id: String(bId || DEFAULT_BUSINESS_ID),
-    order_id: String(p.orderId || p.order_id || p.id),
+    order_id: orderIdStr,
     total: Number(p.amount ?? p.total ?? 0),
-    method: p.method || (Array.isArray(p.payments) && p.payments.length ? p.payments.map(x => x.method).join(" + ") : "Efectivo"),
-    payments: p.payments || [],
-    items: p.items || [],
-    customer: p.customer || "",
-    cashier: p.cashierName || p.cashier || "",
-    shift_id: String(p.shiftId || p.shift_id || ""),
-    fecha: toIsoDate(p.paidAt || p.createdAt || p.date || p.fecha),
-    created_at: toIsoDate(p.paidAt || p.createdAt || p.date || p.created_at),
+    method: primaryMethod,
+    payments: pays,
+    metodos_pago: pays,
+    items: itemsList,
+    customer: String(p.customer || ""),
+    cashier: cashierStr,
+    cajero: cashierStr,
+    shift_id: shiftIdStr,
+    fecha: dateIso,
+    created_at: dateIso,
     updated_at: toIsoDate(p.updatedAt || p.updated_at || Date.now())
   };
 }
@@ -195,22 +205,22 @@ function countPendingRecords() {
   let count = 0;
   try {
     if (Array.isArray(state.products)) {
-      count += state.products.filter(p => p.sync_status === "pending").length;
+      count += state.products.filter(p => p.sync_status === "pending" || (!p.synced && p.sync_status !== "synced")).length;
     }
     if (Array.isArray(state.payments)) {
-      count += state.payments.filter(p => p.sync_status === "pending").length;
+      count += state.payments.filter(p => p.sync_status === "pending" || (!p.synced && p.sync_status !== "synced")).length;
     }
     if (Array.isArray(state.expenses)) {
-      count += state.expenses.filter(g => g.sync_status === "pending").length;
+      count += state.expenses.filter(g => g.sync_status === "pending" || (!g.synced && g.sync_status !== "synced")).length;
     }
     if (Array.isArray(state.purchases)) {
-      count += state.purchases.filter(g => g.sync_status === "pending").length;
+      count += state.purchases.filter(g => g.sync_status === "pending" || (!g.synced && g.sync_status !== "synced")).length;
     }
     if (Array.isArray(state.suppliers)) {
-      count += state.suppliers.filter(s => s.sync_status === "pending").length;
+      count += state.suppliers.filter(s => s.sync_status === "pending" || (!s.synced && s.sync_status !== "synced")).length;
     }
     if (Array.isArray(state.stockLog)) {
-      count += state.stockLog.filter(l => l.sync_status === "pending").length;
+      count += state.stockLog.filter(l => l.sync_status === "pending" || (!l.synced && l.sync_status !== "synced")).length;
     }
     if (state.profile?.sync_status === "pending") {
       count += 1;
@@ -358,10 +368,11 @@ async function syncSale(sale) {
     const saleRecord = sanitizeVenta(sale, bId);
     const { error: saleErr } = await sb.from("ventas").upsert(saleRecord, { onConflict: "id" });
     if (saleErr) {
-      console.warn("[NexoSync] ⚠️ Error upsert venta:", saleErr.message);
+      console.error(`[NexoSync] ❌ Error exacto al subir venta '${sale.id}':`, saleErr.message || saleErr, saleRecord);
       return { ok: false, error: saleErr.message };
     }
     sale.sync_status = "synced";
+    sale.synced = true;
 
     // Actualizar de inmediato en Supabase el stock de los productos vendidos
     if (Array.isArray(sale.items) && sale.items.length > 0 && typeof state !== "undefined" && Array.isArray(state.products)) {
@@ -377,7 +388,7 @@ async function syncSale(sale) {
         if (prodErr) {
           console.warn("[NexoSync] ⚠️ Error actualizando stock tras syncSale:", prodErr.message);
         } else {
-          affectedProds.forEach(p => { p.sync_status = "synced"; });
+          affectedProds.forEach(p => { p.sync_status = "synced"; p.synced = true; });
           console.log(`[NexoSync] ✅ Stock en Supabase actualizado para ${prodRecords.length} productos tras venta.`);
         }
       }
@@ -387,12 +398,12 @@ async function syncSale(sale) {
     updateIndicator("synced");
     return { ok: true };
   } catch (err) {
-    console.warn("[NexoSync] ⚠️ syncSale excepción:", err.message);
+    console.error("[NexoSync] ❌ syncSale excepción:", err.message);
     return { ok: false, error: err.message };
   }
 }
 
-// Sincronización del estado de apertura / cierre de caja con Supabase
+// Sincronización del estado de apertura / cierre de caja con Supabase (negocios, turnos_caja, cajas)
 async function syncCashShift(shift) {
   const sb = getClient();
   if (!sb) {
@@ -403,6 +414,7 @@ async function syncCashShift(shift) {
   const currentShift = shift || ((typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" });
 
   try {
+    // 1. Persistir de forma segura en 'negocios' (configuracion.cashShift JSONB)
     const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
     const businessPayload = {
       id: String(bId || DEFAULT_BUSINESS_ID),
@@ -422,21 +434,44 @@ async function syncCashShift(shift) {
       console.log(`[NexoSync] ✅ Turno de caja sincronizado en Supabase ('negocios'): ${currentShift.status}`);
     }
 
-    // Intento complementario seguro en tabla turnos_caja (si existiera)
+    // 2. Soporte para tabla 'turnos_caja' con columnas business_id, estado, monto_apertura, fecha_apertura
     try {
       const shiftRecord = {
         id: String(currentShift.id || `shift_${Date.now()}`),
         business_id: String(bId || DEFAULT_BUSINESS_ID),
-        status: String(currentShift.status || "closed"),
-        opening_cash: Number(currentShift.openingCash ?? 0),
-        opened_at: toIsoDate(currentShift.openedAt || Date.now()),
-        closed_at: currentShift.closedAt ? toIsoDate(currentShift.closedAt) : null,
+        estado: String(currentShift.status || "closed"),
+        monto_apertura: Number(currentShift.openingCash ?? 0),
+        fecha_apertura: toIsoDate(currentShift.openedAt || Date.now()),
+        fecha_cierre: currentShift.closedAt ? toIsoDate(currentShift.closedAt) : null,
         created_at: toIsoDate(currentShift.openedAt || Date.now()),
         updated_at: new Date().toISOString()
       };
-      await sb.from("turnos_caja").upsert(shiftRecord, { onConflict: "id" });
+      const { error: tcErr } = await sb.from("turnos_caja").upsert(shiftRecord, { onConflict: "id" });
+      if (!tcErr) {
+        console.log("[NexoSync] ✅ Turno de caja registrado en tabla 'turnos_caja'.");
+      }
     } catch (e) {
-      /* ignore si la tabla opcional no existe */
+      /* ignore si la tabla opcional turnos_caja no existe */
+    }
+
+    // 3. Soporte para tabla 'cajas' con columnas business_id, estado, monto_apertura, fecha_apertura
+    try {
+      const cajaRecord = {
+        id: String(currentShift.id || `caja_${Date.now()}`),
+        business_id: String(bId || DEFAULT_BUSINESS_ID),
+        estado: String(currentShift.status || "closed"),
+        monto_apertura: Number(currentShift.openingCash ?? 0),
+        fecha_apertura: toIsoDate(currentShift.openedAt || Date.now()),
+        fecha_cierre: currentShift.closedAt ? toIsoDate(currentShift.closedAt) : null,
+        created_at: toIsoDate(currentShift.openedAt || Date.now()),
+        updated_at: new Date().toISOString()
+      };
+      const { error: cErr } = await sb.from("cajas").upsert(cajaRecord, { onConflict: "id" });
+      if (!cErr) {
+        console.log("[NexoSync] ✅ Turno de caja registrado en tabla 'cajas'.");
+      }
+    } catch (e) {
+      /* ignore si la tabla opcional cajas no existe */
     }
 
     return { ok: true, status: currentShift.status };
@@ -445,6 +480,120 @@ async function syncCashShift(shift) {
     return { ok: false, error: err.message };
   }
 }
+
+// Sincronización dedicada de ventas (pushSales): contrasta ventas locales con Supabase y sube las pendientes
+async function syncSales(options = {}) {
+  const sb = getClient();
+  if (!sb) {
+    console.warn("[NexoSync] syncSales: Cliente Supabase no inicializado.");
+    return { ok: false, error: "Cliente no inicializado" };
+  }
+  const bId = getBusinessId();
+  try {
+    const rawSales = (typeof state !== "undefined" && Array.isArray(state.payments)) ? state.payments : [];
+
+    // Consultar IDs de ventas existentes en Supabase para contrastar
+    let remoteSaleIds = new Set();
+    try {
+      const { data: idRows, error: idErr } = await sb.from("ventas").select("id").eq("business_id", bId);
+      if (!idErr && Array.isArray(idRows)) {
+        idRows.forEach(r => { if (r.id) remoteSaleIds.add(String(r.id)); });
+      }
+    } catch (e) {
+      /* ignore */
+    }
+
+    // Tomar ventas que no tengan synced: true o cuyo id no exista aún en Supabase
+    const sales = rawSales.filter(p => {
+      if (options.force) return true;
+      if (!p.synced || p.sync_status !== "synced") return true;
+      if (remoteSaleIds.size > 0 && !remoteSaleIds.has(String(p.id))) return true;
+      return false;
+    });
+
+    if (sales.length > 0) {
+      console.log(`[NexoSync] 📤 Subiendo ${sales.length} ventas locales hacia Supabase...`);
+      const records = sales.map(p => sanitizeVenta(p, bId));
+
+      // Intento por lote primero
+      const { error: saleErr } = await sb.from("ventas").upsert(records, { onConflict: "id" });
+
+      if (!saleErr) {
+        sales.forEach(p => {
+          p.sync_status = "synced";
+          p.synced = true;
+        });
+        console.log(`[NexoSync] ✅ Ventas: ${records.length} sincronizadas por lote.`);
+      } else {
+        console.warn("[NexoSync] ⚠️ Error en subida por lote de ventas:", saleErr.message || saleErr);
+        console.log("[NexoSync] 🔁 Reintentando subida individual para depurar cada venta...");
+
+        let successCount = 0;
+        let failCount = 0;
+
+        for (let i = 0; sales.length > i; i++) {
+          const saleItem = sales[i];
+          const singleRecord = sanitizeVenta(saleItem, bId);
+          try {
+            const { error: singleErr } = await sb.from("ventas").upsert(singleRecord, { onConflict: "id" });
+            if (singleErr) {
+              console.error(`[NexoSync] ❌ Error exacto al subir venta ID '${saleItem.id}':`, singleErr.message || singleErr, singleRecord);
+              failCount++;
+            } else {
+              saleItem.sync_status = "synced";
+              saleItem.synced = true;
+              successCount++;
+            }
+          } catch (ex) {
+            console.error(`[NexoSync] ❌ Excepción al subir venta ID '${saleItem.id}':`, ex.message, singleRecord);
+            failCount++;
+          }
+        }
+
+        console.log(`[NexoSync] 📊 Resultado individual: ${successCount} exitosas, ${failCount} con error.`);
+        if (0 >= successCount && failCount > 0) {
+          return { ok: false, count: 0, failed: failCount, error: saleErr.message };
+        }
+      }
+
+      // Actualizar stock en Supabase de los productos incluidos en las ventas sincronizadas
+      const affectedProductIds = new Set();
+      sales.forEach(s => {
+        if (s.sync_status === "synced" && Array.isArray(s.items)) {
+          s.items.forEach(it => {
+            const pid = it.productId || it.id;
+            if (pid) affectedProductIds.add(String(pid));
+          });
+        }
+      });
+
+      if (affectedProductIds.size > 0 && typeof state !== "undefined" && Array.isArray(state.products)) {
+        const prodsToUpsert = state.products.filter(p => affectedProductIds.has(String(p.id)));
+        if (prodsToUpsert.length > 0) {
+          const prodRecords = prodsToUpsert.map(p => sanitizeProducto(p, bId));
+          const { error: pErr } = await sb.from("productos").upsert(prodRecords, { onConflict: "id" });
+          if (!pErr) {
+            prodsToUpsert.forEach(p => { p.sync_status = "synced"; p.synced = true; });
+            console.log(`[NexoSync] ✅ Stock en Supabase actualizado para ${prodRecords.length} productos vendidos.`);
+          } else {
+            console.warn("[NexoSync] ⚠️ Error actualizando stock de productos tras ventas:", pErr.message);
+          }
+        }
+      }
+
+      const totalOk = sales.filter(s => s.sync_status === "synced").length;
+      return { ok: true, count: totalOk };
+    }
+
+    console.log("[NexoSync] ℹ️ Ventas: 0 pendientes.");
+    return { ok: true, count: 0 };
+  } catch (err) {
+    console.warn("[NexoSync] ⚠️ Ventas excepción:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+const pushSales = syncSales;
 
 // 4. Método global syncAll(): sincronización secuencial de todas las colecciones con console.log de resultados
 async function syncAll(options = {}) {
@@ -487,54 +636,8 @@ async function syncAll(options = {}) {
   // --- 2. PRODUCTOS ---
   results.productos = await syncProductos(options);
 
-  // --- 3. VENTAS ---
-  try {
-    const rawSales = (typeof state !== "undefined" && Array.isArray(state.payments)) ? state.payments : [];
-    const sales = rawSales.filter(p => options.force || p.sync_status === "pending" || !p.sync_status);
-    if (sales.length > 0) {
-      const records = sales.map(p => sanitizeVenta(p, bId));
-      const { error: saleErr } = await sb.from("ventas").upsert(records, { onConflict: "id" });
-      if (saleErr) {
-        console.warn("[NexoSync] ⚠️ Ventas:", saleErr.message);
-        results.ventas = { ok: false, count: sales.length, error: saleErr.message };
-      } else {
-        sales.forEach(p => { p.sync_status = "synced"; });
-        console.log(`[NexoSync] ✅ Ventas: ${records.length} sincronizadas.`);
-        results.ventas = { ok: true, count: records.length };
-
-        // Actualizar de inmediato en Supabase el stock de todos los productos incluidos en estas ventas
-        const affectedProductIds = new Set();
-        sales.forEach(s => {
-          if (Array.isArray(s.items)) {
-            s.items.forEach(it => {
-              const pid = it.productId || it.id;
-              if (pid) affectedProductIds.add(String(pid));
-            });
-          }
-        });
-
-        if (affectedProductIds.size > 0 && typeof state !== "undefined" && Array.isArray(state.products)) {
-          const prodsToUpsert = state.products.filter(p => affectedProductIds.has(String(p.id)));
-          if (prodsToUpsert.length > 0) {
-            const prodRecords = prodsToUpsert.map(p => sanitizeProducto(p, bId));
-            const { error: pErr } = await sb.from("productos").upsert(prodRecords, { onConflict: "id" });
-            if (!pErr) {
-              prodsToUpsert.forEach(p => { p.sync_status = "synced"; });
-              console.log(`[NexoSync] ✅ Stock en Supabase actualizado para ${prodRecords.length} productos vendidos.`);
-            } else {
-              console.warn("[NexoSync] ⚠️ Error actualizando stock de productos tras ventas:", pErr.message);
-            }
-          }
-        }
-      }
-    } else {
-      console.log("[NexoSync] ℹ️ Ventas: 0 pendientes.");
-      results.ventas = { ok: true, count: 0 };
-    }
-  } catch (err) {
-    console.warn("[NexoSync] ⚠️ Ventas excepción:", err.message);
-    results.ventas = { ok: false, error: err.message };
-  }
+  // --- 3. VENTAS (syncSales / pushSales) ---
+  results.ventas = await syncSales(options);
 
   // --- 4. GASTOS / COMPRAS ---
   try {
@@ -677,11 +780,11 @@ async function pullAllFromSupabase(businessId) {
           if (latestShift && typeof state !== "undefined" && state) {
             state.cashShift = {
               id: latestShift.id,
-              status: latestShift.status,
-              openingCash: Number(latestShift.opening_cash ?? 0),
-              openedAt: new Date(latestShift.opened_at || Date.now()).getTime(),
-              closedAt: latestShift.closed_at ? new Date(latestShift.closed_at).getTime() : null,
-              date: (latestShift.opened_at || new Date().toISOString()).slice(0, 10)
+              status: latestShift.estado || latestShift.status || "closed",
+              openingCash: Number(latestShift.monto_apertura ?? latestShift.opening_cash ?? 0),
+              openedAt: new Date(latestShift.fecha_apertura || latestShift.opened_at || Date.now()).getTime(),
+              closedAt: (latestShift.fecha_cierre || latestShift.closed_at) ? new Date(latestShift.fecha_cierre || latestShift.closed_at).getTime() : null,
+              date: (latestShift.fecha_apertura || latestShift.opened_at || new Date().toISOString()).slice(0, 10)
             };
             if (typeof renderShiftStatus === "function") {
               try { renderShiftStatus(); } catch (e) { /* ignore */ }
@@ -689,7 +792,30 @@ async function pullAllFromSupabase(businessId) {
           }
         }
       } catch (e) {
-        /* ignore si la tabla opcional no existe */
+        /* ignore si la tabla opcional turnos_caja no existe */
+      }
+
+      // Consulta de respaldo complementaria a tabla cajas (si existiera)
+      try {
+        const { data: cajaRows, error: cErr } = await sb.from("cajas").select("*").eq("business_id", bId).order("updated_at", { ascending: false }).limit(1);
+        if (!cErr && Array.isArray(cajaRows) && cajaRows.length > 0) {
+          const latestCaja = cajaRows[0];
+          if (latestCaja && typeof state !== "undefined" && state) {
+            state.cashShift = {
+              id: latestCaja.id,
+              status: latestCaja.estado || latestCaja.status || "closed",
+              openingCash: Number(latestCaja.monto_apertura ?? latestCaja.opening_cash ?? 0),
+              openedAt: new Date(latestCaja.fecha_apertura || latestCaja.opened_at || Date.now()).getTime(),
+              closedAt: (latestCaja.fecha_cierre || latestCaja.closed_at) ? new Date(latestCaja.fecha_cierre || latestCaja.closed_at).getTime() : null,
+              date: (latestCaja.fecha_apertura || latestCaja.opened_at || new Date().toISOString()).slice(0, 10)
+            };
+            if (typeof renderShiftStatus === "function") {
+              try { renderShiftStatus(); } catch (e) { /* ignore */ }
+            }
+          }
+        }
+      } catch (e) {
+        /* ignore si la tabla opcional cajas no existe */
       }
     } catch (e) {
       console.warn("[NexoSync] Error descargando negocio:", e.message);
@@ -784,7 +910,10 @@ async function pullAllFromSupabase(businessId) {
           if (!Array.isArray(state.payments)) state.payments = [];
           salesData.forEach(v => {
             const existingSale = state.payments.find(p => p.id === v.id);
-            if (!existingSale) {
+            if (existingSale) {
+              existingSale.sync_status = "synced";
+              existingSale.synced = true;
+            } else {
               const parsedDate = v.fecha ? String(v.fecha).slice(0, 10) : (typeof today === "function" ? today() : new Date().toISOString().slice(0, 10));
               state.payments.push({
                 id: String(v.id),
@@ -801,7 +930,8 @@ async function pullAllFromSupabase(businessId) {
                 createdAt: new Date(v.created_at || v.fecha || Date.now()).getTime(),
                 created_at: toIsoDate(v.created_at || v.fecha),
                 updated_at: toIsoDate(v.updated_at),
-                sync_status: "synced"
+                sync_status: "synced",
+                synced: true
               });
             }
           });
@@ -1115,11 +1245,29 @@ function setupRealtime() {
           if (typeof state !== "undefined" && state) {
             state.cashShift = {
               id: row.id,
-              status: row.status,
-              openingCash: Number(row.opening_cash ?? 0),
-              openedAt: new Date(row.opened_at || Date.now()).getTime(),
-              closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null,
-              date: (row.opened_at || new Date().toISOString()).slice(0, 10)
+              status: row.estado || row.status || "closed",
+              openingCash: Number(row.monto_apertura ?? row.opening_cash ?? 0),
+              openedAt: new Date(row.fecha_apertura || row.opened_at || Date.now()).getTime(),
+              closedAt: (row.fecha_cierre || row.closed_at) ? new Date(row.fecha_cierre || row.closed_at).getTime() : null,
+              date: (row.fecha_apertura || row.opened_at || new Date().toISOString()).slice(0, 10)
+            };
+            if (typeof scheduleSave === "function") scheduleSave();
+            if (typeof renderShiftStatus === "function") renderShiftStatus();
+            if (typeof renderAll === "function") renderAll();
+          }
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "cajas", filter: `business_id=eq.${bId}` }, payload => {
+        if (payload?.new) {
+          const row = payload.new;
+          if (typeof state !== "undefined" && state) {
+            state.cashShift = {
+              id: row.id,
+              status: row.estado || row.status || "closed",
+              openingCash: Number(row.monto_apertura ?? row.opening_cash ?? 0),
+              openedAt: new Date(row.fecha_apertura || row.opened_at || Date.now()).getTime(),
+              closedAt: (row.fecha_cierre || row.closed_at) ? new Date(row.fecha_cierre || row.closed_at).getTime() : null,
+              date: (row.fecha_apertura || row.opened_at || new Date().toISOString()).slice(0, 10)
             };
             if (typeof scheduleSave === "function") scheduleSave();
             if (typeof renderShiftStatus === "function") renderShiftStatus();
@@ -1133,10 +1281,11 @@ function setupRealtime() {
   }
 }
 
-// Función para ejecutar sincronización manual bidireccional completa (Push + Pull)
-async function triggerBidirectionalSync() {
+// 6. Forzar re-sincronización total: contrasta todas las ventas locales con Supabase y sube de inmediato las faltantes
+async function forceSyncAll() {
+  console.log("[NexoSync] 🔄 Iniciando Forzar Re-sincronización Total...");
   if (typeof showToast === "function") {
-    showToast("Sincronizando bidireccionalmente con Supabase...");
+    showToast("Revisando ventas locales y contrastando con Supabase...");
   }
   const ok = await checkInitialConnection();
   if (!ok) {
@@ -1146,17 +1295,45 @@ async function triggerBidirectionalSync() {
     return { ok: false, error: "Sin conexión" };
   }
 
-  // 1. Subir cambios pendientes locales (Push)
-  await syncAll({ force: true });
+  // 1. Marcar registros locales para forzar revisión y subida
+  if (typeof state !== "undefined" && state) {
+    if (Array.isArray(state.payments)) {
+      state.payments.forEach(p => { p.sync_status = "pending"; p.synced = false; });
+    }
+    if (Array.isArray(state.products)) {
+      state.products.forEach(p => { p.sync_status = "pending"; p.synced = false; });
+    }
+    if (Array.isArray(state.expenses)) {
+      state.expenses.forEach(e => { e.sync_status = "pending"; e.synced = false; });
+    }
+    if (Array.isArray(state.purchases)) {
+      state.purchases.forEach(pur => { pur.sync_status = "pending"; pur.synced = false; });
+    }
+  }
 
-  // 2. Descargar últimos cambios remotos (Pull)
+  // 2. Subida forzada completa (Push): syncAll({ force: true }) contrasta IDs y sube todas las ventas pendientes
+  const pushRes = await syncAll({ force: true });
+
+  // 3. Sincronizar inmediatamente el estado actual de la caja
+  if (typeof state !== "undefined" && state?.cashShift) {
+    await syncCashShift(state.cashShift);
+  }
+
+  // 4. Descargar últimos cambios remotos (Pull)
   const pullRes = await pullAllFromSupabase();
 
+  const totalVentas = (typeof state !== "undefined" && Array.isArray(state.payments)) ? state.payments.length : 0;
+  const pushedVentas = pushRes?.ventas?.count ?? 0;
+  console.log(`[NexoSync] 🏁 Re-sincronización completada. Ventas locales: ${totalVentas}, ventas subidas: ${pushedVentas}.`);
+
   if (typeof showToast === "function") {
-    showToast(`✅ Sincronización bidireccional lista (${pullRes?.count ?? 0} registros actualizados).`);
+    showToast(`✅ Re-sincronización total lista: ${totalVentas} ventas verificadas, ${pullRes?.count ?? 0} registros en total.`);
   }
-  return { ok: true, pulled: pullRes?.count ?? 0 };
+
+  return { ok: true, pushedVentas, pullCount: pullRes?.count ?? 0 };
 }
+
+const triggerBidirectionalSync = forceSyncAll;
 
 function init() {
   updateIndicator(typeof navigator !== "undefined" && navigator.onLine ? "syncing" : "offline");
@@ -1186,7 +1363,7 @@ function init() {
         const btn = e.target.closest("button") || e.target.closest("div");
         if (btn) btn.classList.add("is-syncing");
         try {
-          await triggerBidirectionalSync();
+          await forceSyncAll();
         } finally {
           if (btn) btn.classList.remove("is-syncing");
         }
@@ -1267,9 +1444,12 @@ rootScope.NexoSync = {
   syncAll,
   syncData,
   syncSale,
+  syncSales,
+  pushSales,
   syncCashShift,
   syncProductos,
   pullAllFromSupabase,
+  forceSyncAll,
   triggerBidirectionalSync,
   scheduleSync,
   checkInitialConnection,
