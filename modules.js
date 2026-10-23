@@ -173,7 +173,7 @@ function renderRecentInvoices() {
 }
 function filteredInvoices() {
   const f = invoiceFilter, day = f.date === 'all' ? null : (f.date || today()), q = f.q.trim().toLowerCase();
-  return [...state.payments].filter(p => (!day || p.date === day) && (!f.method || p.method === f.method) && (!q || [p.invoiceNo, p.customer, p.waiterName, p.cashierName, ...(p.items || []).map(i => i.name)].join(' ').toLowerCase().includes(q))).sort((a, b) => paymentTimestamp(b) - paymentTimestamp(a));
+  return [...state.payments].filter(p => (!day || p.date === day) && (!f.method || p.method === f.method || (Array.isArray(p.payments) && p.payments.some(t => t.method === f.method))) && (!q || [p.invoiceNo, p.customer, p.waiterName, p.cashierName, ...(p.items || []).map(i => i.name)].join(' ').toLowerCase().includes(q))).sort((a, b) => paymentTimestamp(b) - paymentTimestamp(a));
 }
 function renderInvoices() {
   if (!can('view.invoices')) return;
@@ -186,10 +186,30 @@ function renderInvoices() {
 /* Ajusta el inventario cuando cambia lo vendido: soldDelta > 0 descuenta, < 0 devuelve. */
 function adjustSoldStock(item, soldDelta) {
   if (!soldDelta) return;
+  const nowIso = new Date().toISOString();
   const apply = (supply, amount) => { supply.qty = Math.max(0, Number((supply.qty - amount).toFixed(2))); };
-  const inventoryId = item.inventoryId || state.products.find(p => p.id === item.productId)?.inventoryId;
-  if (inventoryId) { const supply = state.inventory.find(i => i.id === inventoryId); if (supply) apply(supply, soldDelta); return; }
-  Object.entries(item.recipe || {}).forEach(([id, amount]) => { const supply = state.inventory.find(i => i.id === id); if (supply) apply(supply, amount * soldDelta); });
+  const prod = state.products.find(p => p.id === (item.productId || item.id) || (item.inventoryId && p.inventoryId === item.inventoryId));
+  const invId = item.inventoryId || prod?.inventoryId || (prod ? `stock-${prod.id}` : null);
+  const supply = invId ? state.inventory.find(i => i.id === invId) : null;
+
+  if (prod) {
+    const prevStock = Number(prod.stock != null ? prod.stock : (supply?.qty ?? 0));
+    prod.stock = Math.max(0, Number((prevStock - soldDelta).toFixed(2)));
+    prod.updated_at = nowIso;
+    prod.sync_status = 'pending';
+  }
+  if (supply) {
+    supply.qty = prod ? prod.stock : Math.max(0, Number((supply.qty - soldDelta).toFixed(2)));
+  }
+
+  // Receta con insumos secundarios distintos al producto (omitir si es el mismo insumo)
+  Object.entries(item.recipe || {}).forEach(([id, amount]) => {
+    if (id === invId || id === supply?.id || id === prod?.inventoryId || id === prod?.id) return;
+    const sup = state.inventory.find(i => i.id === id);
+    if (sup) {
+      apply(sup, amount * soldDelta);
+    }
+  });
 }
 function draftTotal() { return (invoiceDraft?.items || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 0), 0); }
 function openInvoiceEdit(id) {
@@ -198,7 +218,9 @@ function openInvoiceEdit(id) {
   invoiceDraft = { id, customer: payment.customer || '', method: payment.method, items: structuredClone(payment.items || []) };
   document.querySelector('#invoiceDialogNo').textContent = payment.invoiceNo || 'FACTURA';
   document.querySelector('#invoiceCustomer').value = invoiceDraft.customer;
-  document.querySelector('#invoiceMethodEdit').innerHTML = ['Efectivo', 'Tarjeta', 'Nequi', 'Daviplata'].map(m => `<option>${m}</option>`).join(''); document.querySelector('#invoiceMethodEdit').value = payment.method;
+  const standardMethods = ['Efectivo', 'Nequi', 'Daviplata', 'Tarjeta / Datáfono', 'Transferencia'];
+  const allMethods = Array.from(new Set([...standardMethods, payment.method].filter(Boolean)));
+  document.querySelector('#invoiceMethodEdit').innerHTML = allMethods.map(m => `<option ${payment.method === m ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
   document.querySelector('#invoiceAddProduct').innerHTML = state.products.map(p => `<option value="${p.id}">${escapeHtml(p.name)} · ${money.format(p.price)}</option>`).join('');
   document.querySelector('#invoiceReason').value = '';
   const warning = document.querySelector('#invoiceWarning'), closedShift = !isShiftOpen() || payment.shiftId !== state.cashShift?.id;
@@ -303,48 +325,170 @@ function savePurchase() {
   const supplier = upsertSupplier(supplierName);
   const lines = purchaseDraft.map(line => { const product = state.products.find(item => item.id === line.productId); return { ...line, productName: product.name, total: line.qty * line.unitCost }; });
   lines.forEach(line => {
-    const product = state.products.find(item => item.id === line.productId), supply = state.inventory.find(item => item.id === product.inventoryId);
-    const stockBefore = supply ? Math.max(0, supply.qty) : 0, costBefore = Number(product.cost || 0);
-    const average = stockBefore > 0 && costBefore > 0 ? (stockBefore * costBefore + line.qty * line.unitCost) / (stockBefore + line.qty) : line.unitCost; // promedio ponderado móvil (si no había costo previo, usa el de la compra)
-    if (supply) supply.qty = Number((supply.qty + line.qty).toFixed(2));
-    line.avgCostAfter = Math.round(average * 100) / 100; product.cost = line.avgCostAfter; product.lastCost = line.unitCost;
+    const product = state.products.find(item => item.id === line.productId), supply = state.inventory.find(item => item.id === product?.inventoryId);
+    const stockBefore = supply ? Math.max(0, Number(supply.qty || 0)) : Math.max(0, Number(product?.stock || 0));
+    const newStock = Number((stockBefore + line.qty).toFixed(2));
+    if (supply) supply.qty = newStock;
+    if (product) {
+      product.stock = newStock;
+      product.updated_at = new Date().toISOString();
+      product.sync_status = 'pending';
+      const costBefore = Number(product.cost || 0);
+      const average = stockBefore > 0 && costBefore > 0 ? (stockBefore * costBefore + line.qty * line.unitCost) / (stockBefore + line.qty) : line.unitCost;
+      line.avgCostAfter = Math.round(average * 100) / 100;
+      product.cost = line.avgCostAfter;
+      product.lastCost = line.unitCost;
+    }
   });
   const total = lines.reduce((sum, line) => sum + line.total, 0);
-  state.purchases.push({ id: uid('buy'), supplier: supplier.name, supplierId: supplier.id, invoice, date, method, lines, total, createdAt: Date.now(), shiftId: state.cashShift.id, userName: actor().userName });
-  saveState(); document.querySelector('#purchaseDialog').close(); renderAll(); showToast('Factura guardada: inventario sumado y costo promedio actualizado.');
+  state.purchases.push({
+    id: uid('buy'),
+    supplier: supplier.name,
+    supplierId: supplier.id,
+    invoice,
+    date,
+    method,
+    lines,
+    total,
+    createdAt: Date.now(),
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    shiftId: state.cashShift.id,
+    userName: actor().userName,
+    sync_status: 'pending'
+  });
+  saveState();
+  document.querySelector('#purchaseDialog').close();
+  renderAll();
+  showToast('Factura guardada: inventario sumado y costo promedio actualizado.');
+  if (globalThis.NexoSync?.syncAll) {
+    globalThis.NexoSync.syncAll().catch(() => {});
+  }
 }
 
 /* ============ Mermas, conteo físico y ajustes ============ */
-function supplyUnitCost(supplyId) { return Number(state.products.find(p => p.inventoryId === supplyId)?.cost || 0); }
-function logStock(entry) { state.stockLog.push({ id: uid('stk'), at: Date.now(), date: today(), userName: actor().userName, ...entry }); if (state.stockLog.length > 2000) state.stockLog.splice(0, state.stockLog.length - 2000); }
-const STOCK_TYPES = { merma: 'Merma', conteo: 'Conteo físico', ajuste: 'Ajuste' };
+function supplyProduct(supplyId) {
+  return state.products.find(p => p.inventoryId === supplyId || p.id === supplyId);
+}
+function supplyUnitCost(supplyId) {
+  return Number(supplyProduct(supplyId)?.cost || 0);
+}
+function supplyUnitPrice(supplyId) {
+  return Number(supplyProduct(supplyId)?.price || 0);
+}
+function logStock(entry) {
+  state.stockLog.push({ id: uid('stk'), at: Date.now(), date: today(), userName: actor().userName, sync_status: 'pending', ...entry });
+  if (state.stockLog.length > 2000) state.stockLog.splice(0, state.stockLog.length - 2000);
+  if (globalThis.NexoSync?.scheduleSync) globalThis.NexoSync.scheduleSync();
+}
+const STOCK_TYPES = {
+  merma: 'Merma / Ajuste',
+  conteo: 'Conteo físico',
+  ajuste: 'Ajuste manual'
+};
 function renderStockLog() {
-  const rows = [...state.stockLog].reverse().slice(0, 15);
-  document.querySelector('#stockLogTable').innerHTML = rows.map(e => `<tr><td>${fmtDateTime(e.at)}</td><td><span class="status ${e.delta < 0 ? 'low' : 'good'}">${STOCK_TYPES[e.type] || e.type}</span></td><td>${escapeHtml(e.itemName)}</td><td>${e.delta > 0 ? '+' : ''}${formatQty(e.delta)} ${escapeHtml(e.unit || '')}</td><td>${e.value ? `${e.value < 0 ? '−' : '+'}${money.format(Math.abs(e.value))}` : '—'}</td><td>${escapeHtml(e.reason || '')}</td><td>${escapeHtml(e.userName || '')}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Aún no hay mermas, conteos ni ajustes registrados.</td></tr>';
+  const rows = [...state.stockLog].reverse().slice(0, 20);
+  const tbody = document.querySelector('#stockLogTable');
+  if (!tbody) return;
+  tbody.innerHTML = rows.map(e => {
+    const costVal = e.value != null ? Math.abs(e.value) : (e.cost ? Math.abs(e.delta * e.cost) : 0);
+    const saleVal = e.saleValue != null ? Math.abs(e.saleValue) : (e.price ? Math.abs(e.delta * e.price) : 0);
+    const reasonText = e.reasonCategory || e.reason || STOCK_TYPES[e.type] || e.type;
+    return `
+      <tr>
+        <td>${fmtDateTime(e.at)}</td>
+        <td><span class="status ${e.delta < 0 ? 'status-out' : 'status-good'}">${escapeHtml(reasonText)}</span></td>
+        <td><strong>${escapeHtml(e.itemName)}</strong></td>
+        <td><b>${e.delta > 0 ? '+' : ''}${formatQty(e.delta)}</b> ${escapeHtml(e.unit || '')}</td>
+        <td>${costVal > 0 ? money.format(costVal) : '—'}</td>
+        <td>${saleVal > 0 ? money.format(saleVal) : '—'}</td>
+        <td><small class="muted">${escapeHtml(e.note || e.reason || '—')}</small></td>
+        <td>${escapeHtml(e.userName || '')}</td>
+      </tr>
+    `;
+  }).join('') || '<tr><td colspan="8" class="muted">Aún no hay ajustes, mermas ni conteos registrados.</td></tr>';
 }
 function saveInventory() {
   if (!requireOpenShift()) return;
   const item = state.inventory.find(i => i.id === document.querySelector('#inventorySelect').value), delta = Number(document.querySelector('#inventoryAmount').value), reason = document.querySelector('#inventoryReason').value.trim();
   if (!item || !delta) return showToast('Indica una cantidad válida.');
   const before = item.qty; item.qty = Math.max(0, Number((item.qty + delta).toFixed(2))); const real = Number((item.qty - before).toFixed(2));
-  logStock({ type: 'ajuste', itemId: item.id, itemName: item.name, unit: item.unit, delta: real, value: real * supplyUnitCost(item.id), reason: reason || 'Ajuste manual' });
+  const p = supplyProduct(item.id);
+  if (p) {
+    p.stock = item.qty;
+    p.updated_at = new Date().toISOString();
+    p.sync_status = 'pending';
+  }
+  const cost = supplyUnitCost(item.id), price = supplyUnitPrice(item.id);
+  logStock({ type: 'ajuste', reasonCategory: reason || 'Ajuste manual', itemId: item.id, itemName: item.name, unit: item.unit, delta: real, cost, price, value: real * cost, saleValue: real * price, reason: reason || 'Ajuste manual' });
   saveState(); document.querySelector('#inventoryDialog').close(); renderAll(); showToast('Inventario actualizado.');
 }
 function openWasteDialog() {
   if (!can('merma')) return deny();
-  document.querySelector('#wasteItem').innerHTML = state.inventory.map(i => `<option value="${i.id}">${escapeHtml(i.name)} (${formatQty(i.qty)} ${i.unit})</option>`).join('');
-  document.querySelector('#wasteQty').value = ''; document.querySelector('#wasteNote').value = ''; updateWasteValue(); document.querySelector('#wasteDialog').showModal();
+  document.querySelector('#wasteItem').innerHTML = state.inventory.map(i => {
+    const p = supplyProduct(i.id);
+    return `<option value="${i.id}">${escapeHtml(i.name)} (Stock: ${formatQty(i.qty)} ${escapeHtml(i.unit)} · Costo: ${money.format(p?.cost || 0)})</option>`;
+  }).join('');
+  document.querySelector('#wasteQty').value = '';
+  document.querySelector('#wasteNote').value = '';
+  document.querySelector('#wasteReason').value = 'Rotura / Merma';
+  updateWasteValue();
+  document.querySelector('#wasteDialog').showModal();
 }
-function updateWasteValue() { const item = state.inventory.find(i => i.id === document.querySelector('#wasteItem').value), qty = Number(document.querySelector('#wasteQty').value || 0); document.querySelector('#wasteValue').textContent = item && qty > 0 ? `Pérdida estimada: ${money.format(qty * supplyUnitCost(item.id))} (a costo promedio)` : ''; }
+function updateWasteValue() {
+  const item = state.inventory.find(i => i.id === document.querySelector('#wasteItem')?.value);
+  const qty = Number(document.querySelector('#wasteQty')?.value || 0);
+  const el = document.querySelector('#wasteValue');
+  if (!el) return;
+  if (!item || !(qty > 0)) {
+    el.textContent = 'Indica la cantidad a descontar para ver la valoración contable ($0 en ventas/caja).';
+    return;
+  }
+  const cost = supplyUnitCost(item.id);
+  const price = supplyUnitPrice(item.id);
+  el.innerHTML = `<strong>Valoración contable:</strong> Pérdida al costo: <b>${money.format(qty * cost)}</b> · Precio venta: <b>${money.format(qty * price)}</b> <br><small class="muted">($0 de impacto financiero en caja y ventas)</small>`;
+}
 function saveWaste() {
   if (!can('merma')) return deny();
-  const item = state.inventory.find(i => i.id === document.querySelector('#wasteItem').value), qty = Number(document.querySelector('#wasteQty').value), type = document.querySelector('#wasteReason').value, note = document.querySelector('#wasteNote').value.trim();
-  if (!item || !(qty > 0)) return showToast('Indica la cantidad perdida.');
+  const item = state.inventory.find(i => i.id === document.querySelector('#wasteItem')?.value);
+  const qty = Number(document.querySelector('#wasteQty')?.value);
+  const reason = document.querySelector('#wasteReason')?.value || 'Rotura / Merma';
+  const note = document.querySelector('#wasteNote')?.value.trim() || '';
+  if (!item || !(qty > 0)) return showToast('Indica la cantidad a descontar.');
   if (qty > item.qty) return showToast(`En el sistema solo hay ${formatQty(item.qty)} ${item.unit}.`);
-  item.qty = Number((item.qty - qty).toFixed(2));
-  logStock({ type: 'merma', itemId: item.id, itemName: item.name, unit: item.unit, delta: -qty, value: -qty * supplyUnitCost(item.id), reason: note ? `${type}: ${note}` : type });
-  logAudit('Merma registrada', `${formatQty(qty)} ${item.unit} de ${item.name} · ${type}`);
-  saveState(); document.querySelector('#wasteDialog').close(); renderAll(); showToast('Merma registrada y descontada del inventario.');
+
+  const cost = supplyUnitCost(item.id);
+  const price = supplyUnitPrice(item.id);
+
+  // Descontar inmediatamente del inventario
+  item.qty = Math.max(0, Number((item.qty - qty).toFixed(2)));
+  const prod = supplyProduct(item.id);
+  if (prod) {
+    prod.stock = item.qty;
+    prod.updated_at = new Date().toISOString();
+    prod.sync_status = 'pending';
+  }
+
+  logStock({
+    type: 'merma',
+    reasonCategory: reason,
+    itemId: item.id,
+    itemName: item.name,
+    unit: item.unit,
+    delta: -qty,
+    cost,
+    price,
+    value: -qty * cost,
+    saleValue: -qty * price,
+    reason,
+    note
+  });
+
+  logAudit('Ajuste de stock registrado', `${formatQty(qty)} ${item.unit} de ${item.name} · ${reason}${note ? ' (' + note + ')' : ''}`);
+  saveState();
+  document.querySelector('#wasteDialog').close();
+  renderAll();
+  showToast(`Ajuste registrado: -${formatQty(qty)} ${item.unit} de ${item.name} (${reason}).`);
 }
 function openCountDialog() {
   if (!can('conteo')) return deny();
@@ -400,7 +544,13 @@ function reportDataset() {
   const { from, to } = reportBounds(), prev = previousBounds(), payments = reportPayments(), prevPayments = paymentsBetween(prev.from, prev.to);
   const data = { from, to, prev, payments, cur: paymentMetrics(payments), old: paymentMetrics(prevPayments), byMethod: {}, byProduct: {}, byCategory: {}, byWaiter: {}, hours: Array(24).fill(0), hourCount: Array(24).fill(0), weekdays: Array(7).fill(0), weekdayDays: Array(7).fill(0) };
   payments.forEach(p => {
-    data.byMethod[p.method] = (data.byMethod[p.method] || 0) + p.amount;
+    if (Array.isArray(p.payments) && p.payments.length > 0) {
+      p.payments.forEach(tender => {
+        data.byMethod[tender.method] = (data.byMethod[tender.method] || 0) + tender.amount;
+      });
+    } else {
+      data.byMethod[p.method] = (data.byMethod[p.method] || 0) + p.amount;
+    }
     const waiter = p.waiterName || 'Sin asignar'; const w = data.byWaiter[waiter] || (data.byWaiter[waiter] = { sales: 0, count: 0 }); w.sales += p.amount; w.count++;
     const hour = new Date(paymentTimestamp(p)).getHours(); data.hours[hour] += p.amount; data.hourCount[hour]++;
     data.weekdays[parseISO(p.date).getDay()] += p.amount;
@@ -465,7 +615,43 @@ function renderReports() {
   const cats = Object.entries(d.byCategory).sort((a, b) => b[1].sales - a[1].sales), catMax = cats[0]?.[1].sales || 1, catTotal = cats.reduce((s, [, v]) => s + v.sales, 0) || 1;
   $('#categoryChart').innerHTML = cats.length ? cats.map(([name, v]) => `<div class="chart-row"><span title="${escapeHtml(name)}">${escapeHtml(name)} · ${(v.sales / catTotal * 100).toFixed(0)}%</span><div class="chart-track"><div class="chart-fill" style="width:${Math.max(4, v.sales / catMax * 100)}%"></div></div><strong>${money.format(v.sales)}</strong></div>`).join('') : '<p class="muted">Aún no hay ventas por categoría.</p>';
   $('#waiterReport').innerHTML = Object.keys(d.byWaiter).length ? rowList(Object.entries(d.byWaiter).sort((a, b) => b[1].sales - a[1].sales).map(([name, v]) => [`${escapeHtml(name)} <small class="muted">· ${v.count} fact.</small>`, money.format(v.sales)])) : '<p class="muted">Aún no hay ventas.</p>';
-  $('#stockReport').innerHTML = rowList([['Mermas (costo)', `− ${money.format(d.mermas)}`], ['Faltantes en conteo', `− ${money.format(d.faltantes)}`], ['Sobrantes en conteo', `+ ${money.format(d.sobrantes)}`], ['Pérdida neta de inventario', money.format(d.stockLoss)]]);
+  const mermasBreakdown = {
+    'Rotura / Merma': { qty: 0, cost: 0, sale: 0 },
+    'Cortesía de la casa': { qty: 0, cost: 0, sale: 0 },
+    'Consumo de personal': { qty: 0, cost: 0, sale: 0 },
+    'Otro ajuste': { qty: 0, cost: 0, sale: 0 }
+  };
+  let totalBajasQty = 0, totalBajasCost = 0, totalBajasSale = 0;
+  (d.stock || []).forEach(e => {
+    if (e.delta < 0) {
+      const cat = e.reasonCategory || e.reason || '';
+      let k = 'Otro ajuste';
+      if (cat.includes('Rotura') || cat.includes('Merma')) k = 'Rotura / Merma';
+      else if (cat.includes('Cortesía') || cat.includes('Cortesia')) k = 'Cortesía de la casa';
+      else if (cat.includes('Consumo') || cat.includes('personal')) k = 'Consumo de personal';
+
+      const q = Math.abs(e.delta);
+      const c = e.value != null ? Math.abs(e.value) : (e.cost ? q * e.cost : 0);
+      const s = e.saleValue != null ? Math.abs(e.saleValue) : (e.price ? q * e.price : 0);
+
+      mermasBreakdown[k].qty += q;
+      mermasBreakdown[k].cost += c;
+      mermasBreakdown[k].sale += s;
+
+      totalBajasQty += q;
+      totalBajasCost += c;
+      totalBajasSale += s;
+    }
+  });
+
+  const stockRows = [
+    ['Roturas y mermas', `${formatQty(mermasBreakdown['Rotura / Merma'].qty)} und · Costo: ${money.format(mermasBreakdown['Rotura / Merma'].cost)} (Venta: ${money.format(mermasBreakdown['Rotura / Merma'].sale)})`],
+    ['Cortesías de la casa', `${formatQty(mermasBreakdown['Cortesía de la casa'].qty)} und · Costo: ${money.format(mermasBreakdown['Cortesía de la casa'].cost)} (Venta: ${money.format(mermasBreakdown['Cortesía de la casa'].sale)})`],
+    ['Consumo de personal', `${formatQty(mermasBreakdown['Consumo de personal'].qty)} und · Costo: ${money.format(mermasBreakdown['Consumo de personal'].cost)} (Venta: ${money.format(mermasBreakdown['Consumo de personal'].sale)})`],
+    ['Otros ajustes y conteo', `${formatQty(mermasBreakdown['Otro ajuste'].qty)} und · Costo: ${money.format(mermasBreakdown['Otro ajuste'].cost)}`],
+    ['TOTAL BAJAS AUDITADAS', `<strong>${formatQty(totalBajasQty)} und · ${money.format(totalBajasCost)} costo (${money.format(totalBajasSale)} venta)</strong>`]
+  ];
+  $('#stockReport').innerHTML = rowList(stockRows);
 }
 
 /* ---------- Exportar a Excel (.xlsx real, sin librerías) ---------- */

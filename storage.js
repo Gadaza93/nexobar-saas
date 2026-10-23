@@ -100,6 +100,11 @@ async function refreshStorageInfo(force = false) {
   const el = document.querySelector('#storageInfo'); if (!el || (!force && Date.now() - storageInfoAt < 60000)) return; storageInfoAt = Date.now();
   let text = storageMode === 'indexeddb' ? 'Almacenamiento: IndexedDB del equipo' : 'Almacenamiento: localStorage (este navegador no permite IndexedDB)';
   try { const estimate = await navigator.storage?.estimate?.(); if (estimate?.usage != null) text += ` · ${(estimate.usage / 1048576).toFixed(1)} MB en uso`; } catch { /* opcional */ }
+  const syncInfo = globalThis.NexoSync?.getStatus?.();
+  if (syncInfo) {
+    const syncText = syncInfo.status === 'synced' ? 'Nube conectada (Sincronizado)' : syncInfo.status === 'syncing' ? 'Sincronizando con Supabase...' : 'Modo Offline (Almacenamiento 100% local)';
+    text += `<br><small>Sincronización en la nube: <b>${syncText}</b></small>`;
+  }
   if (globalThis.desktop?.info) { try { const info = await desktop.info(); text += `<br><small>Datos en disco: ${escapeHtml(info.dataFile)}<br>Carpeta de respaldos: ${escapeHtml(info.backupDir)}</small>`; } catch { /* opcional */ } }
   if (storageStatus.error) text += `<br><small class="warn-text">Aviso: ${escapeHtml(storageStatus.error)}</small>`;
   el.innerHTML = text;

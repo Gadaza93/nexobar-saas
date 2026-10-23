@@ -1,10 +1,38 @@
-const CACHE = 'nexobar-pos-v10';
-const ASSETS = ['./', './index.html', './theme.css', './styles.css', './design.css', './storage.js', './modules.js', './app.js', './manifest.webmanifest', './logo.png'];
+const CACHE = 'nexobar-pos-v11';
+const ASSETS = [
+  './',
+  './index.html',
+  './theme.css',
+  './styles.css',
+  './design.css',
+  './storage.js',
+  './modules.js',
+  './sync.js',
+  './app.js',
+  './manifest.webmanifest',
+  './logo.png'
+];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
-  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
-    const copy = response.clone(); caches.open(CACHE).then(cache => cache.put(event.request, copy)); return response;
-  }).catch(() => caches.match('./index.html'))));
+  const url = new URL(event.request.url);
+  // Don't intercept cross-origin API calls (like Supabase REST)
+  if (url.origin !== self.location.origin) return;
+
+  event.respondWith(
+    caches.match(event.request).then(cached => {
+      if (cached) return cached;
+      return fetch(event.request).then(response => {
+        const copy = response.clone();
+        caches.open(CACHE).then(cache => cache.put(event.request, copy));
+        return response;
+      }).catch(() => {
+        if (event.request.mode === 'navigate' || event.request.destination === 'document') {
+          return caches.match('./index.html');
+        }
+        return caches.match(event.request);
+      });
+    })
+  );
 });

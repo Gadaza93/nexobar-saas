@@ -18,7 +18,7 @@
     "appId": "co.nexobar.pos",
     "productName": "NexoBar",
     "directories": { "output": "dist" },
-    "files": ["electron/**", "index.html", "app.js", "storage.js", "modules.js", "theme.css", "styles.css", "design.css", "manifest.webmanifest", "build/icon.png", "logo.png"],
+    "files": ["electron/**", "index.html", "app.js", "storage.js", "modules.js", "sync.js", "theme.css", "styles.css", "design.css", "manifest.webmanifest", "build/icon.png", "logo.png"],
     "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "icon": "build/icon.png" },
     "nsis": {
       "oneClick": false,
