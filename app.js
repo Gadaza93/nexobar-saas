@@ -1223,8 +1223,9 @@ async function bootstrap() {
   storageReady = true;
   scheduleSave();
 
-  // Si la base local está vacía o es la instalación por defecto, intentar hidratar desde Supabase
-  if (isFreshLocal && typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase) {
+  // Si la base local está vacía, tiene admin por defecto o requiere setup, consultar configuración en Supabase
+  const needsCloudConfig = isFreshLocal || !state.users.length || state.users.some(u => u.role === 'admin' && u.mustChangePin);
+  if (needsCloudConfig && typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase) {
     try {
       const pullRes = await globalThis.NexoSync.pullAllFromSupabase();
       if (pullRes && pullRes.ok && pullRes.count > 0) {

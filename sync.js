@@ -187,13 +187,18 @@ function sanitizeMerma(l, bId) {
 
 function sanitizeNegocio(profile, bId) {
   const prof = profile || {};
+  const admin = (typeof state !== "undefined" && Array.isArray(state.users)) ? state.users.find(u => u.role === "admin") : null;
+  const adminPin = prof.admin_pin || prof.adminPin || (admin && !admin.mustChangePin && toCyrb53Hash(`${admin.salt}:2013`) === admin.pinHash ? "2013" : "");
+
   return {
     id: String(bId || DEFAULT_BUSINESS_ID),
     nombre: prof.name || prof.nombre || "NexoBar",
     telefono: prof.phone || prof.ownerPhone || prof.telefono || "",
     configuracion: {
       ...prof,
-      cashShift: (typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" }
+      cashShift: (typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" },
+      ...(adminPin ? { admin_pin: adminPin, adminPin: adminPin } : {}),
+      ...(admin ? { admin_salt: admin.salt, admin_hash: admin.pinHash, mustChangePin: Boolean(admin.mustChangePin) } : {})
     },
     created_at: toIsoDate(prof.createdAt || prof.created_at || Date.now()),
     updated_at: toIsoDate(prof.updatedAt || prof.updated_at || Date.now())
@@ -477,6 +482,121 @@ async function syncCashShift(shift) {
     return { ok: true, status: currentShift.status };
   } catch (err) {
     console.warn("[NexoSync] ⚠️ syncCashShift excepción:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Algoritmo hash compatible cyrb53 sin caracteres menor que
+function toCyrb53Hash(str, seed = 0) {
+  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; str.length > i; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+// Actualizar el PIN de administrador en la memoria local y cache sin alterar el flujo offline
+function applyAdminPinLocally(pin, salt, hash) {
+  if (!pin || typeof state === "undefined" || !state) return;
+  if (!Array.isArray(state.users)) state.users = [];
+
+  let admin = state.users.find(u => u.role === "admin");
+  if (!admin) {
+    admin = {
+      id: `usr_${Date.now()}`,
+      name: "Administrador",
+      role: "admin",
+      active: true,
+      createdAt: Date.now()
+    };
+    state.users.push(admin);
+  }
+
+  const cleanPin = String(pin).trim();
+  const s = salt || admin.salt || Math.random().toString(36).slice(2, 10);
+  const h = toCyrb53Hash(`${s}:${cleanPin}`);
+
+  admin.salt = s;
+  admin.pinHash = h;
+  admin.mustChangePin = false;
+
+  if (state.profile) {
+    state.profile.admin_pin = cleanPin;
+    state.profile.adminPin = cleanPin;
+  }
+
+  const pinDlg = typeof document !== "undefined" ? document.querySelector("#pinDialog") : null;
+  if (pinDlg && pinDlg.open && typeof forcedPinChange !== "undefined" && !forcedPinChange) {
+    try { pinDlg.close(); } catch (e) { /* ignore */ }
+  }
+
+  if (typeof renderLogin === "function") {
+    try { renderLogin(); } catch (e) { /* ignore */ }
+  }
+  if (typeof saveState === "function") saveState();
+  if (typeof scheduleSave === "function") scheduleSave();
+}
+
+// Sincronización del PIN de Administrador con Supabase (negocios.configuracion.admin_pin)
+async function syncAdminPin(pin, user) {
+  const sb = getClient();
+  if (!sb || !pin) return { ok: false, error: "Cliente Supabase no disponible o PIN vacío" };
+  const bId = getBusinessId();
+  const cleanPin = String(pin).trim();
+  const u = user || ((typeof state !== "undefined" && Array.isArray(state.users)) ? state.users.find(x => x.role === "admin") : null);
+  const salt = u?.salt || Math.random().toString(36).slice(2, 10);
+  const hash = toCyrb53Hash(`${salt}:${cleanPin}`);
+
+  // Actualizar primero en la base local (offline-first)
+  applyAdminPinLocally(cleanPin, salt, hash);
+
+  try {
+    const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
+    const currentShift = (typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" };
+    const updatedConfig = {
+      ...prof,
+      admin_pin: cleanPin,
+      adminPin: cleanPin,
+      admin_salt: salt,
+      admin_hash: hash,
+      mustChangePin: false,
+      cashShift: currentShift
+    };
+
+    const businessPayload = {
+      id: String(bId || DEFAULT_BUSINESS_ID),
+      nombre: prof.name || prof.nombre || "NexoBar",
+      telefono: prof.phone || prof.ownerPhone || prof.telefono || "",
+      configuracion: updatedConfig,
+      updated_at: new Date().toISOString()
+    };
+
+    // 1. Intentar persistir con columna opcional 'admin_pin' en la tabla negocios
+    try {
+      const { error: colErr } = await sb.from("negocios").upsert({ ...businessPayload, admin_pin: cleanPin }, { onConflict: "id" });
+      if (!colErr) {
+        console.log("[NexoSync] ✅ PIN de admin sincronizado en columna 'admin_pin' de Supabase.");
+        return { ok: true, pin: cleanPin };
+      }
+    } catch (e) {
+      /* ignore si la columna directa no existe */
+    }
+
+    // 2. Persistir en la columna JSONB 'configuracion' (siempre compatible)
+    const { error: negErr } = await sb.from("negocios").upsert(businessPayload, { onConflict: "id" });
+    if (negErr) {
+      console.warn("[NexoSync] ⚠️ Error sincronizando admin_pin en negocios:", negErr.message);
+      return { ok: false, error: negErr.message };
+    }
+
+    console.log("[NexoSync] ✅ PIN de administración sincronizado exitosamente en Supabase ('negocios').");
+    return { ok: true, pin: cleanPin };
+  } catch (err) {
+    console.warn("[NexoSync] ⚠️ syncAdminPin excepción:", err.message);
     return { ok: false, error: err.message };
   }
 }
@@ -766,6 +886,16 @@ async function pullAllFromSupabase(businessId) {
             if (typeof renderShiftStatus === "function") {
               try { renderShiftStatus(); } catch (e) { /* ignore */ }
             }
+          }
+
+          // Centralización y descarga del PIN de Administrador desde Supabase
+          const remotePin = negData.admin_pin || negData.configuracion?.admin_pin || negData.configuracion?.adminPin;
+          if (remotePin) {
+            applyAdminPinLocally(
+              remotePin,
+              negData.configuracion?.admin_salt,
+              negData.configuracion?.admin_hash
+            );
           }
 
           results.negocios = 1;
@@ -1221,6 +1351,16 @@ function setupRealtime() {
             if (row.nombre && state.profile) state.profile.name = row.nombre;
             if (row.telefono && state.profile) state.profile.phone = row.telefono;
 
+            // Sincronización en vivo del PIN de administración
+            const newAdminPin = row.admin_pin || row.configuracion?.admin_pin || row.configuracion?.adminPin;
+            if (newAdminPin) {
+              applyAdminPinLocally(
+                newAdminPin,
+                row.configuracion?.admin_salt,
+                row.configuracion?.admin_hash
+              );
+            }
+
             const remoteShift = row.configuracion?.cashShift;
             if (remoteShift && typeof remoteShift === "object") {
               state.cashShift = remoteShift;
@@ -1419,6 +1559,13 @@ function init() {
   setTimeout(async () => {
     const ok = await checkInitialConnection();
     if (ok) {
+      if (typeof state !== "undefined" && state) {
+        const localAdmin = state.users?.find(u => u.role === "admin");
+        const pinToSync = state.profile?.admin_pin || state.profile?.adminPin || (localAdmin && !localAdmin.mustChangePin && toCyrb53Hash(`${localAdmin.salt}:2013`) === localAdmin.pinHash ? "2013" : "");
+        if (localAdmin && !localAdmin.mustChangePin && pinToSync) {
+          syncAdminPin(pinToSync, localAdmin).catch(() => {});
+        }
+      }
       if (countPendingRecords() > 0) {
         await syncAll();
       }
@@ -1447,6 +1594,8 @@ rootScope.NexoSync = {
   syncSales,
   pushSales,
   syncCashShift,
+  syncAdminPin,
+  applyAdminPinLocally,
   syncProductos,
   pullAllFromSupabase,
   forceSyncAll,

@@ -28,6 +28,9 @@ function cyrb53(str, seed = 0) { let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ s
 function hashPin(pin, salt) { return cyrb53(`${salt}:${pin}`); }
 function newUser(name, role, pin) { const salt = Math.random().toString(36).slice(2, 10); return { id: uid('usr'), name, role, salt, pinHash: hashPin(pin, salt), active: true, createdAt: Date.now() }; }
 function setUserPin(user, pin) { user.salt = Math.random().toString(36).slice(2, 10); user.pinHash = hashPin(pin, user.salt); }
+globalThis.cyrb53 = cyrb53;
+globalThis.hashPin = hashPin;
+globalThis.setUserPin = setUserPin;
 
 /* Completa los datos nuevos al cargar o restaurar un respaldo (se llama desde normalizeState). */
 function ensureExtras(s) {
@@ -35,7 +38,12 @@ function ensureExtras(s) {
   ['users', 'suppliers', 'stockLog', 'auditLog', 'backupLog'].forEach(key => { s[key] = Array.isArray(s[key]) ? structuredClone(s[key]) : []; });
   s.backupSettings = { ...BACKUP_DEFAULTS, ...(s.backupSettings || {}) };
   s.invoiceCounter = Number(s.invoiceCounter || 0);
-  if (!s.users.length) { const admin = newUser('Administrador', 'admin', '1234'); admin.mustChangePin = true; s.users.push(admin); }
+  if (!s.users.length) {
+    const existingPin = s.profile?.admin_pin || s.profile?.adminPin;
+    const admin = newUser('Administrador', 'admin', existingPin || '1234');
+    admin.mustChangePin = !existingPin;
+    s.users.push(admin);
+  }
   (s.purchases || []).forEach(purchase => {
     if (purchase.supplierId || !purchase.supplier) return;
     let supplier = s.suppliers.find(item => item.name.toLowerCase() === String(purchase.supplier).toLowerCase());
@@ -121,6 +129,9 @@ function savePin() {
   if (hashPin(pin, user.salt) === user.pinHash) return showToast('Elige un PIN diferente al actual.');
   setUserPin(user, pin); user.mustChangePin = false; logAudit('PIN cambiado', user.name); saveState();
   forcedPinChange = false; document.querySelector('#pinDialog').close(); renderAll(); showToast('PIN actualizado.');
+  if (user.role === 'admin' && globalThis.NexoSync?.syncAdminPin) {
+    globalThis.NexoSync.syncAdminPin(pin, user).catch(err => console.warn('[NexoSync] Error syncAdminPin:', err));
+  }
 }
 
 /* ---------- Equipo y bitácora ---------- */
@@ -151,9 +162,24 @@ function saveUser() {
   if (user) {
     const changes = [];
     if (user.name !== name) changes.push(`nombre «${user.name}» → «${name}»`); if (user.role !== role) changes.push(`rol ${ROLE_LABELS[user.role]} → ${ROLE_LABELS[role]}`); if ((user.active !== false) !== active) changes.push(active ? 'reactivado' : 'desactivado'); if (pin) changes.push('PIN restablecido');
-    Object.assign(user, { name, role, active }); if (pin) { setUserPin(user, pin); user.mustChangePin = user.id !== me()?.id; }
+    Object.assign(user, { name, role, active });
+    if (pin) {
+      setUserPin(user, pin);
+      user.mustChangePin = user.id !== me()?.id;
+      if (user.role === 'admin' && globalThis.NexoSync?.syncAdminPin) {
+        globalThis.NexoSync.syncAdminPin(pin, user).catch(err => console.warn('[NexoSync] Error syncAdminPin:', err));
+      }
+    }
     logAudit('Usuario editado', `${name}${changes.length ? ': ' + changes.join(', ') : ''}`);
-  } else { const created = newUser(name, role, pin); created.mustChangePin = true; state.users.push(created); logAudit('Usuario creado', `${name} · ${ROLE_LABELS[role]}`); }
+  } else {
+    const created = newUser(name, role, pin);
+    created.mustChangePin = true;
+    state.users.push(created);
+    if (created.role === 'admin' && globalThis.NexoSync?.syncAdminPin) {
+      globalThis.NexoSync.syncAdminPin(pin, created).catch(err => console.warn('[NexoSync] Error syncAdminPin:', err));
+    }
+    logAudit('Usuario creado', `${name} · ${ROLE_LABELS[role]}`);
+  }
   saveState(); document.querySelector('#userDialog').close(); renderAll(); if (!me()) showLogin(); showToast('Usuario guardado.');
 }
 
