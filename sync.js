@@ -181,7 +181,10 @@ function sanitizeNegocio(profile, bId) {
     id: String(bId || DEFAULT_BUSINESS_ID),
     nombre: prof.name || prof.nombre || "NexoBar",
     telefono: prof.phone || prof.ownerPhone || prof.telefono || "",
-    configuracion: prof || {},
+    configuracion: {
+      ...prof,
+      cashShift: (typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" }
+    },
     created_at: toIsoDate(prof.createdAt || prof.created_at || Date.now()),
     updated_at: toIsoDate(prof.updatedAt || prof.updated_at || Date.now())
   };
@@ -346,6 +349,103 @@ async function syncProductos(options = {}) {
   }
 }
 
+// Sincronización inmediata de una venta individual y actualización de stock de sus productos en Supabase
+async function syncSale(sale) {
+  const sb = getClient();
+  if (!sb || !sale) return { ok: false, error: "Cliente no inicializado o venta vacía" };
+  const bId = getBusinessId();
+  try {
+    const saleRecord = sanitizeVenta(sale, bId);
+    const { error: saleErr } = await sb.from("ventas").upsert(saleRecord, { onConflict: "id" });
+    if (saleErr) {
+      console.warn("[NexoSync] ⚠️ Error upsert venta:", saleErr.message);
+      return { ok: false, error: saleErr.message };
+    }
+    sale.sync_status = "synced";
+
+    // Actualizar de inmediato en Supabase el stock de los productos vendidos
+    if (Array.isArray(sale.items) && sale.items.length > 0 && typeof state !== "undefined" && Array.isArray(state.products)) {
+      const pIds = new Set();
+      sale.items.forEach(it => {
+        const id = it.productId || it.id;
+        if (id) pIds.add(String(id));
+      });
+      const affectedProds = state.products.filter(p => pIds.has(String(p.id)));
+      if (affectedProds.length > 0) {
+        const prodRecords = affectedProds.map(p => sanitizeProducto(p, bId));
+        const { error: prodErr } = await sb.from("productos").upsert(prodRecords, { onConflict: "id" });
+        if (prodErr) {
+          console.warn("[NexoSync] ⚠️ Error actualizando stock tras syncSale:", prodErr.message);
+        } else {
+          affectedProds.forEach(p => { p.sync_status = "synced"; });
+          console.log(`[NexoSync] ✅ Stock en Supabase actualizado para ${prodRecords.length} productos tras venta.`);
+        }
+      }
+    }
+
+    if (typeof scheduleSave === "function") scheduleSave();
+    updateIndicator("synced");
+    return { ok: true };
+  } catch (err) {
+    console.warn("[NexoSync] ⚠️ syncSale excepción:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Sincronización del estado de apertura / cierre de caja con Supabase
+async function syncCashShift(shift) {
+  const sb = getClient();
+  if (!sb) {
+    console.warn("[NexoSync] syncCashShift: Cliente Supabase no inicializado.");
+    return { ok: false, error: "Cliente no inicializado" };
+  }
+  const bId = getBusinessId();
+  const currentShift = shift || ((typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" });
+
+  try {
+    const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
+    const businessPayload = {
+      id: String(bId || DEFAULT_BUSINESS_ID),
+      nombre: prof.name || prof.nombre || "NexoBar",
+      telefono: prof.phone || prof.ownerPhone || prof.telefono || "",
+      configuracion: {
+        ...prof,
+        cashShift: currentShift
+      },
+      updated_at: new Date().toISOString()
+    };
+
+    const { error: negErr } = await sb.from("negocios").upsert(businessPayload, { onConflict: "id" });
+    if (negErr) {
+      console.warn("[NexoSync] ⚠️ Error sincronizando cashShift en negocios:", negErr.message);
+    } else {
+      console.log(`[NexoSync] ✅ Turno de caja sincronizado en Supabase ('negocios'): ${currentShift.status}`);
+    }
+
+    // Intento complementario seguro en tabla turnos_caja (si existiera)
+    try {
+      const shiftRecord = {
+        id: String(currentShift.id || `shift_${Date.now()}`),
+        business_id: String(bId || DEFAULT_BUSINESS_ID),
+        status: String(currentShift.status || "closed"),
+        opening_cash: Number(currentShift.openingCash ?? 0),
+        opened_at: toIsoDate(currentShift.openedAt || Date.now()),
+        closed_at: currentShift.closedAt ? toIsoDate(currentShift.closedAt) : null,
+        created_at: toIsoDate(currentShift.openedAt || Date.now()),
+        updated_at: new Date().toISOString()
+      };
+      await sb.from("turnos_caja").upsert(shiftRecord, { onConflict: "id" });
+    } catch (e) {
+      /* ignore si la tabla opcional no existe */
+    }
+
+    return { ok: true, status: currentShift.status };
+  } catch (err) {
+    console.warn("[NexoSync] ⚠️ syncCashShift excepción:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
 // 4. Método global syncAll(): sincronización secuencial de todas las colecciones con console.log de resultados
 async function syncAll(options = {}) {
   if (isSyncing) return { ok: false, error: "Sync already in progress" };
@@ -401,6 +501,31 @@ async function syncAll(options = {}) {
         sales.forEach(p => { p.sync_status = "synced"; });
         console.log(`[NexoSync] ✅ Ventas: ${records.length} sincronizadas.`);
         results.ventas = { ok: true, count: records.length };
+
+        // Actualizar de inmediato en Supabase el stock de todos los productos incluidos en estas ventas
+        const affectedProductIds = new Set();
+        sales.forEach(s => {
+          if (Array.isArray(s.items)) {
+            s.items.forEach(it => {
+              const pid = it.productId || it.id;
+              if (pid) affectedProductIds.add(String(pid));
+            });
+          }
+        });
+
+        if (affectedProductIds.size > 0 && typeof state !== "undefined" && Array.isArray(state.products)) {
+          const prodsToUpsert = state.products.filter(p => affectedProductIds.has(String(p.id)));
+          if (prodsToUpsert.length > 0) {
+            const prodRecords = prodsToUpsert.map(p => sanitizeProducto(p, bId));
+            const { error: pErr } = await sb.from("productos").upsert(prodRecords, { onConflict: "id" });
+            if (!pErr) {
+              prodsToUpsert.forEach(p => { p.sync_status = "synced"; });
+              console.log(`[NexoSync] ✅ Stock en Supabase actualizado para ${prodRecords.length} productos vendidos.`);
+            } else {
+              console.warn("[NexoSync] ⚠️ Error actualizando stock de productos tras ventas:", pErr.message);
+            }
+          }
+        }
       }
     } else {
       console.log("[NexoSync] ℹ️ Ventas: 0 pendientes.");
@@ -531,8 +656,40 @@ async function pullAllFromSupabase(businessId) {
             syncId: bId,
             sync_status: "synced"
           };
+
+          // Hidratar estado de apertura / cierre de caja desde la configuración remota
+          if (negData.configuracion && typeof negData.configuracion.cashShift === "object" && negData.configuracion.cashShift !== null) {
+            state.cashShift = negData.configuracion.cashShift;
+            if (typeof renderShiftStatus === "function") {
+              try { renderShiftStatus(); } catch (e) { /* ignore */ }
+            }
+          }
+
           results.negocios = 1;
         }
+      }
+
+      // Consulta de respaldo complementaria a tabla turnos_caja (si existiera)
+      try {
+        const { data: shiftRows, error: sErr } = await sb.from("turnos_caja").select("*").eq("business_id", bId).order("updated_at", { ascending: false }).limit(1);
+        if (!sErr && Array.isArray(shiftRows) && shiftRows.length > 0) {
+          const latestShift = shiftRows[0];
+          if (latestShift && typeof state !== "undefined" && state) {
+            state.cashShift = {
+              id: latestShift.id,
+              status: latestShift.status,
+              openingCash: Number(latestShift.opening_cash ?? 0),
+              openedAt: new Date(latestShift.opened_at || Date.now()).getTime(),
+              closedAt: latestShift.closed_at ? new Date(latestShift.closed_at).getTime() : null,
+              date: (latestShift.opened_at || new Date().toISOString()).slice(0, 10)
+            };
+            if (typeof renderShiftStatus === "function") {
+              try { renderShiftStatus(); } catch (e) { /* ignore */ }
+            }
+          }
+        }
+      } catch (e) {
+        /* ignore si la tabla opcional no existe */
       }
     } catch (e) {
       console.warn("[NexoSync] Error descargando negocio:", e.message);
@@ -791,6 +948,9 @@ async function pullAllFromSupabase(businessId) {
     const totalCount = results.negocios + results.productos + results.ventas + results.gastos + results.proveedores + results.mermas;
     console.log(`[NexoSync] 📥 Descarga completada: ${totalCount} registros procesados.`, results);
 
+    if (typeof renderShiftStatus === "function") {
+      try { renderShiftStatus(); } catch (e) { /* ignore */ }
+    }
     if (typeof renderAll === "function") {
       try { renderAll(); } catch (e) { /* ignore */ }
     }
@@ -827,11 +987,26 @@ function setupRealtime() {
                 customer: sale.customer,
                 cashierName: sale.cashier,
                 shiftId: sale.shift_id,
-                paidAt: sale.created_at,
-                createdAt: sale.created_at,
-                date: sale.created_at ? sale.created_at.slice(0, 10) : today(),
+                paidAt: new Date(sale.created_at || Date.now()).getTime(),
+                createdAt: new Date(sale.created_at || Date.now()).getTime(),
+                date: sale.fecha ? String(sale.fecha).slice(0, 10) : new Date().toISOString().slice(0, 10),
                 sync_status: "synced"
               });
+
+              // Descontar inmediatamente en el inventario local los productos vendidos
+              if (Array.isArray(sale.items) && Array.isArray(state.products)) {
+                sale.items.forEach(it => {
+                  const pid = it.productId || it.id;
+                  const p = state.products.find(prod => prod.id === pid);
+                  if (p) {
+                    const qty = Number(it.qty || 1);
+                    p.stock = Math.max(0, Number((Number(p.stock ?? 0) - qty).toFixed(2)));
+                    const inv = state.inventory?.find(i => i.id === p.inventoryId || i.id === `stock-${p.id}`);
+                    if (inv) inv.qty = p.stock;
+                  }
+                });
+              }
+
               if (typeof scheduleSave === "function") scheduleSave();
               if (typeof renderAll === "function") renderAll();
               if (typeof showToast === "function") {
@@ -842,13 +1017,145 @@ function setupRealtime() {
           }
         }
       })
-      .on("postgres_changes", { event: "*", schema: "public", table: "productos", filter: `business_id=eq.${bId}` }, () => {
-        scheduleSync(1200);
+      .on("postgres_changes", { event: "*", schema: "public", table: "productos", filter: `business_id=eq.${bId}` }, payload => {
+        if (payload?.new) {
+          const p = payload.new;
+          if (typeof state !== "undefined" && Array.isArray(state.products)) {
+            const existing = state.products.find(x => x.id === p.id);
+            const currentStock = Number(p.stock ?? 0);
+            const invId = `stock-${p.id}`;
+
+            if (existing) {
+              existing.name = p.nombre || existing.name;
+              existing.category = p.categoria || existing.category;
+              existing.price = Number(p.precio ?? existing.price ?? 0);
+              existing.cost = Number(p.costo ?? existing.cost ?? 0);
+              existing.stock = currentStock;
+              existing.active = p.activo !== false;
+              existing.updated_at = toIsoDate(p.updated_at);
+              existing.sync_status = "synced";
+            } else {
+              state.products.push({
+                id: String(p.id),
+                name: p.nombre || "Producto",
+                category: p.categoria || "Otros",
+                price: Number(p.precio ?? 0),
+                cost: Number(p.costo ?? 0),
+                stock: currentStock,
+                icon: "🍺",
+                image: null,
+                inventoryId: invId,
+                recipe: { [invId]: 1 },
+                active: p.activo !== false,
+                createdAt: toIsoDate(p.created_at),
+                created_at: toIsoDate(p.created_at),
+                updated_at: toIsoDate(p.updated_at),
+                sync_status: "synced"
+              });
+            }
+
+            if (Array.isArray(state.inventory)) {
+              let invItem = state.inventory.find(i => i.id === invId || i.id === existing?.inventoryId);
+              if (invItem) {
+                invItem.name = p.nombre || invItem.name;
+                invItem.qty = currentStock;
+                invItem.min = Number(p.min_stock ?? invItem.min ?? 5);
+              } else {
+                state.inventory.push({
+                  id: invId,
+                  name: p.nombre || "Producto",
+                  unit: "und",
+                  qty: currentStock,
+                  min: Number(p.min_stock ?? 5)
+                });
+              }
+            }
+
+            if (typeof scheduleSave === "function") scheduleSave();
+            if (typeof renderAll === "function") renderAll();
+          }
+        } else if (payload?.eventType === "DELETE" && payload?.old?.id) {
+          if (typeof state !== "undefined" && Array.isArray(state.products)) {
+            state.products = state.products.filter(x => x.id !== payload.old.id);
+            if (typeof scheduleSave === "function") scheduleSave();
+            if (typeof renderAll === "function") renderAll();
+          }
+        } else {
+          pullAllFromSupabase();
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "negocios", filter: `id=eq.${bId}` }, payload => {
+        if (payload?.new) {
+          const row = payload.new;
+          if (typeof state !== "undefined" && state) {
+            if (row.nombre && state.profile) state.profile.name = row.nombre;
+            if (row.telefono && state.profile) state.profile.phone = row.telefono;
+
+            const remoteShift = row.configuracion?.cashShift;
+            if (remoteShift && typeof remoteShift === "object") {
+              state.cashShift = remoteShift;
+              if (typeof renderShiftStatus === "function") {
+                try { renderShiftStatus(); } catch (e) { /* ignore */ }
+              }
+              if (typeof renderAll === "function") {
+                try { renderAll(); } catch (e) { /* ignore */ }
+              }
+              if (typeof scheduleSave === "function") scheduleSave();
+              if (typeof showToast === "function") {
+                const isOpen = remoteShift.status === "open";
+                showToast(isOpen ? "🟢 Turno de caja abierto en vivo" : "🔴 Turno de caja cerrado en vivo");
+              }
+            }
+          }
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "turnos_caja", filter: `business_id=eq.${bId}` }, payload => {
+        if (payload?.new) {
+          const row = payload.new;
+          if (typeof state !== "undefined" && state) {
+            state.cashShift = {
+              id: row.id,
+              status: row.status,
+              openingCash: Number(row.opening_cash ?? 0),
+              openedAt: new Date(row.opened_at || Date.now()).getTime(),
+              closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null,
+              date: (row.opened_at || new Date().toISOString()).slice(0, 10)
+            };
+            if (typeof scheduleSave === "function") scheduleSave();
+            if (typeof renderShiftStatus === "function") renderShiftStatus();
+            if (typeof renderAll === "function") renderAll();
+          }
+        }
       })
       .subscribe();
   } catch (e) {
     console.debug("[NexoSync] Realtime no disponible:", e.message);
   }
+}
+
+// Función para ejecutar sincronización manual bidireccional completa (Push + Pull)
+async function triggerBidirectionalSync() {
+  if (typeof showToast === "function") {
+    showToast("Sincronizando bidireccionalmente con Supabase...");
+  }
+  const ok = await checkInitialConnection();
+  if (!ok) {
+    if (typeof showToast === "function") {
+      showToast("⚠️ Modo Offline: sin conexión a Supabase.");
+    }
+    return { ok: false, error: "Sin conexión" };
+  }
+
+  // 1. Subir cambios pendientes locales (Push)
+  await syncAll({ force: true });
+
+  // 2. Descargar últimos cambios remotos (Pull)
+  const pullRes = await pullAllFromSupabase();
+
+  if (typeof showToast === "function") {
+    showToast(`✅ Sincronización bidireccional lista (${pullRes?.count ?? 0} registros actualizados).`);
+  }
+  return { ok: true, pulled: pullRes?.count ?? 0 };
 }
 
 function init() {
@@ -874,18 +1181,15 @@ function init() {
 
   if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
     document.addEventListener("click", async (e) => {
-      if (e.target.closest("#syncStatusIndicator") || e.target.closest("#syncBadgeTopbar")) {
+      if (e.target.closest("#syncStatusIndicator") || e.target.closest("#syncBadgeTopbar") || e.target.closest("#syncNowButton")) {
         e.preventDefault();
-        if (typeof showToast === "function") {
-          showToast("Comprobando conexión y sincronizando...");
+        const btn = e.target.closest("button") || e.target.closest("div");
+        if (btn) btn.classList.add("is-syncing");
+        try {
+          await triggerBidirectionalSync();
+        } finally {
+          if (btn) btn.classList.remove("is-syncing");
         }
-        checkInitialConnection().then(ok => {
-          if (ok) {
-            pullAllFromSupabase().then(() => {
-              syncAll({ force: true });
-            });
-          }
-        });
       }
       if (e.target.closest("#pullFromCloudButton") || e.target.closest("#sidebarPullButton")) {
         e.preventDefault();
@@ -917,33 +1221,31 @@ function init() {
           if (btn) btn.disabled = false;
         }
       }
-      if (e.target.closest("#syncNowButton")) {
-        e.preventDefault();
-        if (typeof showToast === "function") {
-          showToast("Sincronizando con Supabase...");
-        }
-        await syncAll({ force: true });
-        if (typeof showToast === "function") {
-          showToast("✅ Sincronización completada.");
-        }
-      }
     });
   }
 
+  // Sondeo periódico cada 30 segundos (Push de pendientes + Pull de cambios remotos)
   clearInterval(pingTimer);
   pingTimer = setInterval(async () => {
     if (typeof document !== "undefined" && document.visibilityState === "visible") {
       const ok = await checkInitialConnection();
-      if (ok && countPendingRecords() > 0) {
-        scheduleSync(500);
+      if (ok) {
+        if (countPendingRecords() > 0) {
+          await syncAll();
+        }
+        await pullAllFromSupabase();
       }
     }
-  }, 45000);
+  }, 30000);
 
+  // Inicialización y descarga al arrancar la aplicación
   setTimeout(async () => {
     const ok = await checkInitialConnection();
     if (ok) {
-      syncAll();
+      if (countPendingRecords() > 0) {
+        await syncAll();
+      }
+      await pullAllFromSupabase();
       setupRealtime();
     }
   }, 300);
@@ -964,8 +1266,11 @@ rootScope.NexoSync = {
   init,
   syncAll,
   syncData,
+  syncSale,
+  syncCashShift,
   syncProductos,
   pullAllFromSupabase,
+  triggerBidirectionalSync,
   scheduleSync,
   checkInitialConnection,
   toIsoDate,

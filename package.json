@@ -1,25 +1,55 @@
 {
   "name": "nexobar-pos",
   "version": "1.0.0",
-  "description": "NexoBar · POS Inteligente para Bares con funcionamiento sin conexión",
-  "main": "electron/main.js",
+  "description": "NexoBar · POS Inteligente para Bares con funcionamiento 100% offline y sincronización en la nube",
+  "main": "main.js",
   "author": "NexoBar",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis --x64"
+    "electron:start": "electron .",
+    "electron:build": "electron-builder --win",
+    "dist": "electron-builder --win"
   },
   "devDependencies": {
-    "electron": "latest",
-    "electron-builder": "latest"
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
   },
   "build": {
     "appId": "co.nexobar.pos",
     "productName": "NexoBar",
-    "directories": { "output": "dist" },
-    "files": ["electron/**", "index.html", "app.js", "storage.js", "modules.js", "sync.js", "theme.css", "styles.css", "design.css", "manifest.webmanifest", "build/icon.png", "logo.png"],
-    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "icon": "build/icon.png" },
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "electron/**",
+      "index.html",
+      "app.js",
+      "storage.js",
+      "modules.js",
+      "sync.js",
+      "theme.css",
+      "styles.css",
+      "design.css",
+      "manifest.webmanifest",
+      "build/icon.png",
+      "logo.png"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,

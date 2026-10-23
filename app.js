@@ -526,7 +526,9 @@ function confirmPayment() {
   state.payments.push(newPayment);
   saveState();
 
-  if (globalThis.NexoSync && typeof globalThis.NexoSync.syncAll === 'function') {
+  if (globalThis.NexoSync && typeof globalThis.NexoSync.syncSale === 'function') {
+    globalThis.NexoSync.syncSale(newPayment).catch(err => console.warn('[NexoSync] Error post-venta syncSale:', err));
+  } else if (globalThis.NexoSync && typeof globalThis.NexoSync.syncAll === 'function') {
     globalThis.NexoSync.syncAll().catch(err => console.warn('[NexoSync] Error post-venta:', err));
   }
 
@@ -822,7 +824,18 @@ function saveExpense() {
   }
 }
 function openShiftDialog() { if(isShiftOpen())return openCloseDialog();document.querySelector('#openingCash').value='';document.querySelector('#openShiftDialog').showModal(); }
-function confirmOpenShift() { const raw=document.querySelector('#openingCash').value, openingCash=Number(raw);if(raw===''||openingCash<0)return showToast('Indica la base inicial de efectivo, incluso si es $0.');state.cashShift={id:uid('shift'),status:'open',date:today(),openedAt:Date.now(),openingCash};saveState();document.querySelector('#openShiftDialog').close();renderAll();showToast('Turno de caja abierto.'); }
+function confirmOpenShift() {
+  const raw = document.querySelector('#openingCash').value, openingCash = Number(raw);
+  if (raw === '' || openingCash < 0) return showToast('Indica la base inicial de efectivo, incluso si es $0.');
+  state.cashShift = { id: uid('shift'), status: 'open', date: today(), openedAt: Date.now(), openingCash };
+  saveState();
+  document.querySelector('#openShiftDialog').close();
+  renderAll();
+  showToast('Turno de caja abierto.');
+  if (globalThis.NexoSync?.syncCashShift) {
+    globalThis.NexoSync.syncCashShift(state.cashShift).catch(() => {});
+  }
+}
 function openCloseDialog() { if(!isShiftOpen())return openShiftDialog();const expected=expectedCash(), totalSales=currentShiftPayments().reduce((sum,payment)=>sum+payment.amount,0);document.querySelector('#closeSummary').innerHTML=`<div><span>Base inicial</span><strong>${money.format(state.cashShift.openingCash || 0)}</strong></div><div><span>Ventas en efectivo</span><strong>${money.format(cashSalesToday())}</strong></div><div><span>Ventas por otros medios</span><strong>${money.format(otherSalesToday())}</strong></div><div><span>Compras y gastos en efectivo</span><strong>− ${money.format(cashExpensesToday()+cashPurchasesToday())}</strong></div><div><span>Venta total del turno</span><strong>${money.format(totalSales)}</strong></div>`;document.querySelector('#expectedCashInClose').textContent=money.format(expected);document.querySelector('#countedCash').value=0;resetCashCounter();document.querySelector('#cashDifference').textContent='';document.querySelector('#closeDialog').showModal(); }
 function checkCashDifference() { const diff=Number(document.querySelector('#countedCash').value||0)-expectedCash();const el=document.querySelector('#cashDifference');el.textContent=diff===0?'Caja cuadrada.':`${diff>0?'Sobrante':'Faltante'}: ${money.format(Math.abs(diff))}`;el.className=`change-message ${diff===0?'positive':'negative'}`; }
 let lastClosedShift = null;
@@ -856,6 +869,9 @@ function confirmClose() {
   document.querySelector('#closeDialog').close();
   renderAll();
   showToast('Cierre de caja registrado.');
+  if (globalThis.NexoSync?.syncCashShift) {
+    globalThis.NexoSync.syncCashShift(state.cashShift).catch(() => {});
+  }
   openCloseSuccessDialog(closedShift);
 }
 
