@@ -958,3 +958,215 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
     box-shadow: 0 0 0 0 rgba(255, 140, 50, 0);
   }
 }
+
+/* ============ Módulo de Importación Masiva de Productos ============ */
+.import-products-dialog {
+  width: min(760px, 96vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.import-drop-zone {
+  border: 2px dashed var(--line-strong);
+  border-radius: var(--r-md, 12px);
+  padding: 28px 16px;
+  text-align: center;
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin: 14px 0;
+}
+
+.import-drop-zone:hover, .import-drop-zone.dragover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  transform: scale(0.995);
+}
+
+.drop-zone-icon {
+  width: 42px;
+  height: 42px;
+  color: var(--accent);
+  margin: 0 auto 10px;
+  display: block;
+}
+
+.drop-zone-title {
+  font-size: 14px;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+
+.drop-zone-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.import-file-details {
+  margin: 12px 0;
+}
+
+.file-info-chip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.file-info-chip .file-icon {
+  font-size: 24px;
+}
+
+.file-info-chip .file-texts {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-info-chip .file-texts strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.file-info-chip .file-texts span {
+  font-size: 11px;
+}
+
+.remove-file-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.remove-file-btn:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.import-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.import-options .check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.import-preview-container {
+  margin-top: 14px;
+}
+
+.import-summary-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.summary-pill {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.summary-pill.total strong { color: var(--text); }
+.summary-pill.new { background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.35); color: #22c55e; }
+.summary-pill.update { background: rgba(59, 130, 246, 0.12); border-color: rgba(59, 130, 246, 0.35); color: #3b82f6; }
+.summary-pill.warning { background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.35); color: #ef4444; }
+
+.import-table-wrap {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  background: var(--surface);
+}
+
+.import-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  text-align: left;
+}
+
+.import-preview-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  z-index: 1;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.import-preview-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.import-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.import-badge.badge-new { background: rgba(34, 197, 94, 0.18); color: #22c55e; }
+.import-badge.badge-update { background: rgba(59, 130, 246, 0.18); color: #3b82f6; }
+.import-badge.badge-invalid { background: rgba(239, 68, 68, 0.18); color: #ef4444; }
+
+.import-error-alert {
+  padding: 12px 14px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+.dialog-actions-spread {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}

@@ -91,7 +91,7 @@
         </section>
 
         <section id="products" class="view">
-          <div class="section-heading"><div><h2>Productos</h2><p>Define lo que vendes, su costo, precio de venta y existencia inicial.</p></div><div class="inline-actions"><button id="manageCategoriesButton" class="outline-button">Categorías</button><button id="newProductButton" class="primary-button">+ Nuevo producto</button></div></div>
+          <div class="section-heading"><div><h2>Productos</h2><p>Define lo que vendes, su costo, precio de venta y existencia inicial.</p></div><div class="inline-actions"><button id="downloadTemplateBtn" class="outline-button" type="button" title="Descargar plantilla Excel / CSV"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" style="width:15px;height:15px;vertical-align:-2px;margin-right:4px;"><path d="M12 3v12M7.5 10.5L12 15l4.5-4.5M4 19h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Descargar Plantilla</button><button id="importProductsBtn" class="outline-button" type="button" title="Importar productos masivamente desde Excel o CSV"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" style="width:15px;height:15px;vertical-align:-2px;margin-right:4px;"><path d="M12 16V4M7.5 8.5L12 4l4.5 4.5M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Importar Productos</button><button id="manageCategoriesButton" class="outline-button">Categorías</button><button id="newProductButton" class="primary-button">+ Nuevo producto</button></div></div>
           <div class="data-card"><table><thead><tr><th>Producto</th><th>Categoría</th><th>Costo promedio</th><th>Venta</th><th>Ganancia</th><th>Rentabilidad</th><th>Existencias</th><th></th></tr></thead><tbody id="productsTable"></tbody></table></div>
         </section>
 
@@ -456,10 +456,98 @@
       </div>
     </dialog>
 
+    <dialog id="importProductsDialog" class="small-dialog import-products-dialog">
+      <div class="dialog-header">
+        <div>
+          <p class="eyebrow">CATÁLOGO E INVENTARIO</p>
+          <h2>Importar Productos Masivo</h2>
+        </div>
+        <button class="icon-button" data-close="importProductsDialog" aria-label="Cerrar">×</button>
+      </div>
+
+      <p class="muted">
+        Carga un archivo Excel (.xlsx, .xls) o CSV con tu catálogo de productos e inventario.
+        <a href="#" id="importDialogTemplateLink" class="template-link" style="color:var(--accent);text-decoration:underline;margin-left:4px;font-weight:600;">Descargar plantilla modelo</a>
+      </p>
+
+      <div id="importDropZone" class="import-drop-zone">
+        <input type="file" id="importProductFileInput" accept=".xlsx,.xls,.csv" hidden />
+        <svg class="drop-zone-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <polyline points="14 2 14 8 20 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <line x1="12" y1="18" x2="12" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <polyline points="9 15 12 12 15 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p class="drop-zone-title"><strong>Arrastra tu archivo aquí</strong> o haz clic para seleccionarlo</p>
+        <span class="drop-zone-hint">Formatos soportados: Excel (.xlsx, .xls) o CSV (.csv)</span>
+      </div>
+
+      <div id="importFileDetails" class="import-file-details" hidden>
+        <div class="file-info-chip">
+          <span class="file-icon">📄</span>
+          <div class="file-texts">
+            <strong id="importFileName">archivo.xlsx</strong>
+            <span id="importFileSize" class="muted">0 KB</span>
+          </div>
+          <button type="button" id="importRemoveFileBtn" class="remove-file-btn" title="Quitar archivo">×</button>
+        </div>
+      </div>
+
+      <div class="import-options">
+        <label class="check-row">
+          <input type="checkbox" id="importUpdateExisting" checked />
+          Actualizar productos existentes si coincide el nombre o código
+        </label>
+        <label class="check-row">
+          <input type="checkbox" id="importAdjustNegativeStock" checked />
+          Si el stock es negativo, ajustar a 0 (desmarcar para respetar stock negativo)
+        </label>
+      </div>
+
+      <div id="importErrorAlert" class="import-error-alert" hidden></div>
+
+      <div id="importPreviewContainer" class="import-preview-container" hidden>
+        <div class="import-summary-badges">
+          <span class="summary-pill total">Total filas: <strong id="importSummaryTotal">0</strong></span>
+          <span class="summary-pill new">Nuevos: <strong id="importSummaryNew">0</strong></span>
+          <span class="summary-pill update">Actualizar: <strong id="importSummaryUpdate">0</strong></span>
+          <span class="summary-pill warning" id="importSummaryWarningWrap">Omitidos: <strong id="importSummaryWarning">0</strong></span>
+        </div>
+
+        <div class="import-table-wrap">
+          <table class="import-preview-table">
+            <thead>
+              <tr>
+                <th>Estado</th>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Costo</th>
+                <th>Precio</th>
+                <th>Stock</th>
+                <th>Mín.</th>
+                <th>Unidad</th>
+                <th>Código</th>
+              </tr>
+            </thead>
+            <tbody id="importPreviewBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="dialog-actions-spread">
+        <button type="button" class="outline-button" data-close="importProductsDialog">Cancelar</button>
+        <button type="button" id="confirmImportBtn" class="primary-button" disabled>
+          Confirmar e Importar
+        </button>
+      </div>
+    </dialog>
+
     <div id="toast" class="toast" role="status"></div>
+    <script src="./xlsx.full.min.js"></script>
     <script src="./storage.js"></script>
     <script src="./modules.js"></script>
     <script src="./sync.js"></script>
+    <script src="./import-products.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

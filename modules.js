@@ -776,6 +776,8 @@ function handleModuleClick(event) {
     invoiceTodayButton: () => { invoiceFilter.date = ''; renderInvoices(); }, invoiceAllButton: () => { invoiceFilter.date = 'all'; renderInvoices(); },
     newSupplierButton: () => openSupplierDialog(), saveSupplierButton: saveSupplier, newWasteButton: openWasteDialog, saveWasteButton: saveWaste, newCountButton: openCountDialog, applyCountButton: applyCount,
     exportXlsxButton: exportReportXlsx, printReportButton: printReport,
+    downloadTemplateBtn: () => globalThis.downloadProductTemplate && globalThis.downloadProductTemplate(),
+    importProductsBtn: () => globalThis.openImportProductsDialog && globalThis.openImportProductsDialog(),
     themeToggle: () => { const light = document.documentElement.dataset.theme !== 'light'; if (light) document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme; try { localStorage.setItem('nexobar-theme', light ? 'light' : 'dark'); localStorage.setItem('brasa-theme', light ? 'light' : 'dark'); } catch { /* sin almacenamiento */ } },
     backupNowButton: () => { if (!can('backup')) return deny(); runBackup('Manual', 'manual'); },
     openBackupFolderButton: () => { if (globalThis.desktop) desktop.openBackupFolder(); },
@@ -808,7 +810,7 @@ function handleLoginKeys(event) {
 function initModules() {
   ['openPayment', 'confirmPayment'].forEach(n => guard(n, 'charge'));
   ['openShiftDialog', 'openCloseDialog', 'confirmOpenShift', 'confirmClose'].forEach(n => guard(n, 'shift'));
-  ['openProductDialog', 'saveProduct', 'deleteProduct'].forEach(n => guard(n, 'products'));
+  ['openProductDialog', 'saveProduct', 'deleteProduct', 'openImportProductsDialog'].forEach(n => guard(n, 'products'));
   ['openTablesDialog', 'addTable', 'saveTable', 'deleteTable'].forEach(n => guard(n, 'tables'));
   ['openCategoriesDialog', 'addCategory', 'saveCategory', 'deleteCategory'].forEach(n => guard(n, 'categories'));
   ['saveProfile'].forEach(n => guard(n, 'profile')); ['exportBackup', 'importBackup'].forEach(n => guard(n, 'backup'));
