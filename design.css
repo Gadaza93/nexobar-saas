@@ -881,6 +881,16 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
   font-weight: 600;
 }
 
+/* Estado Azul/Cyan: Modo Demo Local (Sandbox) */
+.sync-state.is-demo .dot {
+  background: #3B82F6 !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3) !important;
+}
+.sync-state.is-demo span:last-child {
+  color: #60A5FA;
+  font-weight: 600;
+}
+
 /* Indicador en la barra superior (topbar) */
 .sync-badge-topbar {
   display: inline-flex;
@@ -939,6 +949,16 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 .sync-badge-topbar.is-offline .dot {
   background: #6B7280 !important;
   box-shadow: 0 0 0 2px rgba(107, 114, 128, 0.2) !important;
+}
+
+.sync-badge-topbar.is-demo {
+  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.12);
+  color: #60A5FA;
+}
+.sync-badge-topbar.is-demo .dot {
+  background: #3B82F6 !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3) !important;
 }
 
 @keyframes syncPulse {

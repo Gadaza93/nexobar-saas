@@ -40,6 +40,35 @@ function isPendingSync(item) {
   return item.sync_status === "nuevo_local" || item.sync_status === "pending";
 }
 
+// Detección de Modo Demo Local (Sandbox) para proteger la base de datos de producción
+function isDemoMode() {
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const search = window.location.search || "";
+      const params = new URLSearchParams(search);
+      if (params.get("demo") === "true") return true;
+      if (params.get("demo") === "false" || params.get("prod") === "true") return false;
+
+      const isDesktop = Boolean(
+        (window.desktop && window.desktop.isDesktop) ||
+        (typeof navigator !== "undefined" && navigator.userAgent && navigator.userAgent.includes("Electron")) ||
+        window.location.protocol === "file:"
+      );
+      if (isDesktop) return false;
+
+      const hostname = window.location.hostname || "";
+      const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "";
+      if (!isLocalhost) {
+        return true;
+      }
+    }
+  } catch (e) {
+    /* ignore */
+  }
+  return false;
+}
+globalThis.isDemoMode = isDemoMode;
+
 const syncState = {
   status: "offline",
   online: (typeof navigator !== "undefined" && navigator.onLine === false) ? false : true,
@@ -299,6 +328,9 @@ function countPendingRecords() {
 }
 
 function updateIndicator(status) {
+  if (isDemoMode()) {
+    status = "demo";
+  }
   syncState.status = status;
   syncState.pendingCount = countPendingRecords();
 
@@ -313,7 +345,12 @@ function updateIndicator(status) {
   let tooltip = "";
   let statusClass = "";
 
-  if (status === "synced") {
+  if (status === "demo") {
+    statusClass = "is-demo";
+    labelText = "Modo Demo (Sandbox)";
+    topbarText = "Modo Demo";
+    tooltip = "Modo Demo Local (Sandbox): Opera 100% con datos locales. No altera la base de datos real de produccion.";
+  } else if (status === "synced") {
     statusClass = "is-synced";
     labelText = "En línea / Sincronizado";
     topbarText = "En línea / Sincronizado";
@@ -349,6 +386,10 @@ function updateIndicator(status) {
 }
 
 async function checkInitialConnection() {
+  if (isDemoMode()) {
+    updateIndicator("demo");
+    return true;
+  }
   const sb = getClient();
   if (!sb) {
     updateIndicator("offline");
@@ -380,6 +421,10 @@ function scheduleSync(delay = 1000) {
 async function deleteProduct(productId) {
   if (!productId) return { ok: false, error: "ID de producto vacio" };
   const cleanId = String(productId);
+  if (isDemoMode()) {
+    console.log(`[NexoSync] 🧪 Modo Demo: Borrado de producto '${cleanId}' ejecutado solo localmente.`);
+    return { ok: true, id: cleanId, demo: true };
+  }
   if (!deletedProductIds.includes(cleanId)) {
     deletedProductIds.push(cleanId);
     saveDeletedIds();
@@ -414,6 +459,10 @@ function trackProductDeletion(productId) {
 async function deleteSale(saleId) {
   if (!saleId) return { ok: false, error: "ID de venta vacio" };
   const cleanId = String(saleId);
+  if (isDemoMode()) {
+    console.log(`[NexoSync] 🧪 Modo Demo: Borrado de venta '${cleanId}' ejecutado solo localmente.`);
+    return { ok: true, id: cleanId, demo: true };
+  }
   if (!deletedSaleIds.includes(cleanId)) {
     deletedSaleIds.push(cleanId);
     saveDeletedIds();
@@ -443,6 +492,11 @@ async function deleteSale(saleId) {
 
 // Sincronización dedicada de productos e inventario con Supabase
 async function syncProductos(options = {}) {
+  if (isDemoMode()) {
+    const rawProds = (typeof state !== "undefined" && Array.isArray(state.products)) ? state.products : [];
+    rawProds.forEach(p => { p.sync_status = "synced"; });
+    return { ok: true, demo: true, count: 0 };
+  }
   const sb = getClient();
   if (!sb) {
     console.warn("[NexoSync] syncProductos: Cliente Supabase no inicializado.");
@@ -489,6 +543,14 @@ async function syncProductos(options = {}) {
 
 // Sincronización inmediata de una venta individual y actualización de stock de sus productos en Supabase
 async function syncSale(sale) {
+  if (isDemoMode()) {
+    if (sale) {
+      sale.sync_status = "synced";
+      sale.synced = true;
+    }
+    console.log("[NexoSync] 🧪 Modo Demo: Venta registrada 100% en almacenamiento local (Supabase protegido).");
+    return { ok: true, demo: true };
+  }
   const sb = getClient();
   if (!sb || !sale) return { ok: false, error: "Cliente no inicializado o venta vacía" };
   const bId = getBusinessId();
@@ -533,6 +595,13 @@ async function syncSale(sale) {
 
 // Sincronización bidireccional de comandas / pedidos activos con Supabase
 async function syncOrders(options = {}) {
+  if (isDemoMode()) {
+    if (typeof state !== "undefined" && Array.isArray(state?.orders)) {
+      state.orders.forEach(o => { o.sync_status = "synced"; });
+    }
+    console.log("[NexoSync] 🧪 Modo Demo: Comandas registradas 100% en almacenamiento local.");
+    return { ok: true, demo: true };
+  }
   const sb = getClient();
   if (!sb) {
     console.warn("[NexoSync] syncOrders: Cliente Supabase no inicializado.");
@@ -678,6 +747,9 @@ async function syncOrders(options = {}) {
 
 // Elimina inmediatamente una orden de 'pedidos_activos' al cobrar o cancelar
 async function deleteActiveOrder(orderId) {
+  if (isDemoMode()) {
+    return { ok: true, demo: true };
+  }
   const sb = getClient();
   if (!sb || !orderId) return { ok: false };
   const bId = getBusinessId();
@@ -778,13 +850,17 @@ function mergeRemoteOrders(remoteOrders) {
 
 // Sincronización del estado de apertura / cierre de caja con Supabase (negocios, turnos_caja, cajas)
 async function syncCashShift(shift, closedData = null) {
+  const currentShift = shift || ((typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" });
+  if (isDemoMode()) {
+    console.log(`[NexoSync] 🧪 Modo Demo: Turno de caja '${currentShift.status}' gestionado 100% localmente.`);
+    return { ok: true, demo: true, status: currentShift.status };
+  }
   const sb = getClient();
   if (!sb) {
     console.warn("[NexoSync] syncCashShift: Cliente Supabase no inicializado.");
     return { ok: false, error: "Cliente no inicializado" };
   }
   const bId = getBusinessId();
-  const currentShift = shift || ((typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" });
   const isShiftOpenStatus = (currentShift.status === "open" || currentShift.status === "abierto");
 
   try {
@@ -929,16 +1005,18 @@ function applyAdminPinLocally(pin, salt, hash) {
 
 // Sincronización del PIN de Administrador con Supabase (negocios.configuracion.admin_pin)
 async function syncAdminPin(pin, user) {
-  const sb = getClient();
-  if (!sb || !pin) return { ok: false, error: "Cliente Supabase no disponible o PIN vacío" };
-  const bId = getBusinessId();
-  const cleanPin = String(pin).trim();
+  const cleanPin = String(pin || "").trim();
   const u = user || ((typeof state !== "undefined" && Array.isArray(state.users)) ? state.users.find(x => x.role === "admin") : null);
   const salt = u?.salt || Math.random().toString(36).slice(2, 10);
   const hash = toCyrb53Hash(`${salt}:${cleanPin}`);
-
-  // Actualizar primero en la base local (offline-first)
   applyAdminPinLocally(cleanPin, salt, hash);
+  if (isDemoMode()) {
+    console.log("[NexoSync] 🧪 Modo Demo: PIN actualizado solo localmente.");
+    return { ok: true, demo: true, pin: cleanPin };
+  }
+  const sb = getClient();
+  if (!sb || !pin) return { ok: false, error: "Cliente Supabase no disponible o PIN vacío" };
+  const bId = getBusinessId();
 
   try {
     const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
@@ -989,6 +1067,9 @@ async function syncAdminPin(pin, user) {
 
 // Sincronización dedicada de ventas (pushSales): contrasta ventas locales con Supabase y sube las pendientes
 async function syncSales(options = {}) {
+  if (isDemoMode()) {
+    return { ok: true, demo: true, count: 0 };
+  }
   const sb = getClient();
   if (!sb) {
     console.warn("[NexoSync] syncSales: Cliente Supabase no inicializado.");
@@ -1101,6 +1182,10 @@ const pushSales = syncSales;
 
 // 4. Método global syncAll(): sincronización secuencial de todas las colecciones con console.log de resultados
 async function syncAll(options = {}) {
+  if (isDemoMode()) {
+    updateIndicator("demo");
+    return { ok: true, demo: true, synced: 0 };
+  }
   if (isSyncing) return { ok: false, error: "Sync already in progress" };
   const sb = getClient();
   if (!sb) {
@@ -1234,6 +1319,11 @@ const syncData = syncAll;
 
 // 5. Descarga e hidratación completa desde Supabase (Initial Pull / Hydration)
 async function pullAllFromSupabase(businessId) {
+  if (isDemoMode()) {
+    console.log("[NexoSync] 🧪 Modo Demo (Sandbox): Descarga omitida para operar 100% con datos locales.");
+    updateIndicator("demo");
+    return { ok: true, demo: true, count: 0 };
+  }
   const sb = getClient();
   if (!sb) {
     console.warn("[NexoSync] pullAllFromSupabase: Cliente Supabase no inicializado.");
@@ -1704,6 +1794,7 @@ async function pullAllFromSupabase(businessId) {
 }
 
 function setupRealtime() {
+  if (isDemoMode()) return;
   const sb = getClient();
   if (!sb || typeof sb.channel !== "function") return;
   try {
@@ -2051,6 +2142,27 @@ async function forceSyncAll() {
 const triggerBidirectionalSync = forceSyncAll;
 
 function init() {
+  if (isDemoMode()) {
+    updateIndicator("demo");
+    console.log("[NexoSync] 🧪 Modo Demo Local (Sandbox) activado. Base de datos de produccion protegida contra escrituras.");
+    if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+      document.addEventListener("click", (e) => {
+        if (e.target.closest("#syncStatusIndicator") || e.target.closest("#syncBadgeTopbar") || e.target.closest("#syncNowButton")) {
+          e.preventDefault();
+          if (typeof showToast === "function") {
+            showToast("Modo Demo activo: Opera 100% en este navegador para proteger el sistema real.");
+          }
+        }
+        if (e.target.closest("#pullFromCloudButton") || e.target.closest("#sidebarPullButton")) {
+          e.preventDefault();
+          if (typeof showToast === "function") {
+            showToast("Modo Demo activo: Las funciones en la nube estan desactivadas en esta version web.");
+          }
+        }
+      });
+    }
+    return;
+  }
   updateIndicator(typeof navigator !== "undefined" && navigator.onLine ? "syncing" : "offline");
 
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
@@ -2162,6 +2274,7 @@ if (typeof document !== "undefined") {
 // Exportación global en window y globalThis
 const rootScope = typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : this);
 rootScope.NexoSync = {
+  isDemoMode,
   init,
   syncAll,
   syncData,

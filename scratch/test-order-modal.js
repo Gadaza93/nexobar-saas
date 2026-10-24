@@ -173,8 +173,9 @@ async function testOrderModal() {
     throw new Error("No se cargaron productos desde Supabase.");
   }
 
-  // Abrir turno de caja para permitir pedidos
+  // Abrir turno de caja para permitir pedidos y limpiar órdenes residuales para la prueba
   global.state.cashShift = { id: 'shift_test', status: 'open', openingCash: 50000 };
+  global.state.orders = [];
 
   // 2. Probar getPOSProducts()
   console.log("\n2. Probando función getPOSProducts()...");

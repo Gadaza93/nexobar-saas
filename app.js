@@ -19,6 +19,97 @@ const defaultState = {
 let state = normalizeState(defaultState); // provisional: bootstrap() carga los datos guardados
 globalThis.state = state;
 globalThis.defaultState = defaultState;
+
+function isDemoMode() {
+  if (typeof globalThis.NexoSync?.isDemoMode === 'function') {
+    return globalThis.NexoSync.isDemoMode();
+  }
+  try {
+    if (typeof window !== 'undefined' && window.location) {
+      const search = window.location.search || '';
+      const params = new URLSearchParams(search);
+      if (params.get('demo') === 'true') return true;
+      if (params.get('demo') === 'false' || params.get('prod') === 'true') return false;
+      const isDesktop = Boolean(
+        (window.desktop && window.desktop.isDesktop) ||
+        (typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.includes('Electron')) ||
+        window.location.protocol === 'file:'
+      );
+      if (isDesktop) return false;
+      const hostname = window.location.hostname || '';
+      const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
+      return !isLocalhost;
+    }
+  } catch (e) {}
+  return false;
+}
+globalThis.isDemoMode = isDemoMode;
+
+const DEMO_PRODUCTS = [
+  { id: 'demo_1', name: 'Cerveza Club Colombia Dorada', category: 'Cervezas', price: 7000, cost: 3500, stock: 24, icon: '🍺' },
+  { id: 'demo_2', name: 'Cerveza Corona Extra 355ml', category: 'Cervezas', price: 9000, cost: 4800, stock: 18, icon: '🍺' },
+  { id: 'demo_3', name: 'Cerveza Stella Artois', category: 'Cervezas', price: 10000, cost: 5200, stock: 15, icon: '🍺' },
+  { id: 'demo_4', name: 'Mojito Clásico', category: 'Cocteles', price: 20000, cost: 7000, stock: 12, icon: '🍸' },
+  { id: 'demo_5', name: 'Gin Tonic Gordons', category: 'Cocteles', price: 24000, cost: 8500, stock: 10, icon: '🍸' },
+  { id: 'demo_6', name: 'Margarita Tradicional', category: 'Cocteles', price: 22000, cost: 8000, stock: 14, icon: '🍸' },
+  { id: 'demo_7', name: 'Aguardiente Antioqueño Azul 750ml', category: 'Licores', price: 75000, cost: 42000, stock: 6, icon: '🍾' },
+  { id: 'demo_8', name: 'Ron Medellín Añejo 8 Años', category: 'Licores', price: 95000, cost: 55000, stock: 5, icon: '🍾' },
+  { id: 'demo_9', name: 'Whisky Old Parr 12 Años', category: 'Licores', price: 180000, cost: 110000, stock: 4, icon: '🥃' },
+  { id: 'demo_10', name: 'Agua Manantial con Gas 600ml', category: 'Sin alcohol', price: 3500, cost: 1500, stock: 20, icon: '🥤' },
+  { id: 'demo_11', name: 'Gaseosa Coca-Cola 400ml', category: 'Sin alcohol', price: 4000, cost: 2000, stock: 24, icon: '🥤' },
+  { id: 'demo_12', name: 'Red Bull Energy Drink', category: 'Sin alcohol', price: 12000, cost: 7000, stock: 16, icon: '⚡' },
+  { id: 'demo_13', name: 'Nachos con Queso y Guacamole', category: 'Comidas', price: 18000, cost: 7500, stock: 10, icon: '🍟' },
+  { id: 'demo_14', name: 'Picada de Carnes para Dos', category: 'Comidas', price: 38000, cost: 18000, stock: 8, icon: '🍖' }
+];
+globalThis.DEMO_PRODUCTS = DEMO_PRODUCTS;
+
+function initDemoDataIfNeeded() {
+  if (!isDemoMode()) return;
+  if (!Array.isArray(state.products) || state.products.length === 0) {
+    console.log('[NexoBar] 🧪 Inicializando catálogo de prueba en Modo Demo (Sandbox)...');
+    state.products = structuredClone(DEMO_PRODUCTS);
+    state.inventory = state.products.map(p => ({
+      id: 'stock-' + p.id,
+      name: p.name,
+      unit: 'und',
+      qty: Number(p.stock || 20),
+      min: 5
+    }));
+    state.products.forEach(p => { p.inventoryId = 'stock-' + p.id; });
+    state.categories = ['Todos', 'Cervezas', 'Cocteles', 'Licores', 'Sin alcohol', 'Comidas'];
+    if (state.profile) {
+      state.profile.name = 'NexoBar (Demo Sandbox)';
+    }
+    globalThis.state = state;
+    saveState();
+  }
+}
+globalThis.initDemoDataIfNeeded = initDemoDataIfNeeded;
+
+function resetDemoData() {
+  if (!isDemoMode()) return;
+  state.products = structuredClone(DEMO_PRODUCTS);
+  state.inventory = state.products.map(p => ({
+    id: 'stock-' + p.id,
+    name: p.name,
+    unit: 'und',
+    qty: Number(p.stock || 20),
+    min: 5
+  }));
+  state.products.forEach(p => { p.inventoryId = 'stock-' + p.id; });
+  state.categories = ['Todos', 'Cervezas', 'Cocteles', 'Licores', 'Sin alcohol', 'Comidas'];
+  state.orders = [];
+  state.payments = [];
+  state.purchases = [];
+  state.expenses = [];
+  state.cashShift = { status: 'closed' };
+  globalThis.state = state;
+  saveState();
+  renderAll();
+  showToast('Datos de prueba reiniciados.');
+}
+globalThis.resetDemoData = resetDemoData;
+
 let reportRange='today', reportDate='';
 let purchaseDraft = [];
 let editingProductId = null;
@@ -1742,12 +1833,18 @@ async function bootstrap() {
   );
 
   state = normalizeState(saved || defaultState);
+  globalThis.state = state;
   storageReady = true;
+
+  if (isDemoMode()) {
+    initDemoDataIfNeeded();
+  }
+
   scheduleSave();
   cleanupOrphanOrders();
 
-  // Si hay conexión, sincronizar con Supabase (descargar turno de caja y pedidos activos)
-  if (typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase) {
+  // Si hay conexión y NO estamos en Modo Demo, sincronizar con Supabase (descargar turno de caja y pedidos activos)
+  if (!isDemoMode() && typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase) {
     try {
       const pullRes = await globalThis.NexoSync.pullAllFromSupabase();
       if (pullRes && pullRes.ok && pullRes.count > 0) {
