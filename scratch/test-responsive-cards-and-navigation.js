@@ -42,7 +42,19 @@ console.log("   ✅ Media query @media (max-width: 768px) definido correctamente
 if (!cssContent.includes('.mobile-drawer') || !cssContent.includes('.mobile-overlay') || !cssContent.includes('.mobile-menu-btn')) {
   throw new Error("CSS Error: Faltan estilos para .mobile-drawer, .mobile-overlay o .mobile-menu-btn");
 }
-console.log("   ✅ Estilos de .mobile-drawer, .mobile-overlay y .mobile-menu-btn verificados");
+if (!cssContent.includes('width: 85%;') || !cssContent.includes('max-width: 320px;') || !cssContent.includes('padding: 24px 18px;')) {
+  throw new Error("CSS Error: .mobile-drawer no tiene width: 85%, max-width: 320px o padding: 24px 18px");
+}
+if (!cssContent.includes('white-space: nowrap;') || !cssContent.includes('gap: 14px;')) {
+  throw new Error("CSS Error: .nav-link no tiene white-space: nowrap o gap: 14px");
+}
+if (!cssContent.includes('min-width: 24px;') || !cssContent.includes('flex-shrink: 0;')) {
+  throw new Error("CSS Error: Los iconos del drawer no tienen min-width: 24px o flex-shrink: 0");
+}
+if (!cssContent.includes('margin-top: auto;') || !cssContent.includes('text-align: center;')) {
+  throw new Error("CSS Error: .mobile-shift-bar no tiene margin-top: auto o text-align: center");
+}
+console.log("   ✅ Estilos de .mobile-drawer (85%, max-width: 320px, padding: 24px 18px, iconos 24px y botón caja) verificados");
 
 // 2. Verificación de HTML (index.html)
 console.log("\n2. Verificando estructura HTML en index.html...");
