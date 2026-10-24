@@ -38,9 +38,12 @@
 
       <main>
         <header class="topbar">
-          <div>
-            <p class="eyebrow" id="todayLabel">Hoy</p>
-            <h1 id="pageTitle">Punto de venta</h1>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button id="btn-mobile-menu" class="mobile-menu-btn" aria-label="Abrir menú de navegación" title="Menú">&#9776;</button>
+            <div>
+              <p class="eyebrow" id="todayLabel">Hoy</p>
+              <h1 id="pageTitle">Punto de venta</h1>
+            </div>
           </div>
           <div class="top-actions">
             <div id="syncBadgeTopbar" class="sync-badge-topbar is-offline" title="Sincronización en la nube (Click para sincronizar)"><span class="dot" id="syncBadgeDot"></span><span id="syncBadgeLabel">Modo Offline</span></div>
@@ -186,8 +189,24 @@
 
     <dialog id="orderDialog" class="wide-dialog">
       <div class="dialog-header"><div><p class="eyebrow" id="orderZone">BARRA</p><h2 id="orderTitle">Nuevo pedido</h2></div><button class="icon-button" data-close="orderDialog" aria-label="Cerrar">×</button></div>
+      <!-- Pestañas solo visibles en móvil -->
+      <div class="order-tabs-mobile" id="orderTabsMobile">
+        <button type="button" class="order-tab-btn active" id="orderTabProducts" data-tab="products"><span>&#127874;</span> Catálogo</button>
+        <button type="button" class="order-tab-btn" id="orderTabTicket" data-tab="ticket"><span>&#128203;</span> Cuenta <span id="mobileOrderCount" class="badge">0</span></button>
+      </div>
       <div class="order-layout">
         <section class="catalog-panel"><div class="search-wrap"><input id="productSearch" type="search" placeholder="Buscar bebida, plato o cóctel" /><span>⌕</span></div><div id="categoryTabs" class="category-tabs"></div><div id="productGrid" class="product-grid"></div></section>
+        <!-- Barra flotante visible solo en móvil cuando se ve el catálogo -->
+        <div class="mobile-order-bar" id="mobileOrderBar">
+          <div class="mobile-order-bar-info" id="mobileBarInfo" title="Ver cuenta">
+            <span class="mobile-order-bar-count" id="mobileBarCount">0 productos</span>
+            <span class="mobile-order-bar-total" id="mobileBarTotal">$0</span>
+          </div>
+          <div class="mobile-order-bar-actions">
+            <button type="button" class="outline-button mobile-order-bar-expand" id="mobileBarTicketBtn" disabled>Ver comanda</button>
+            <button type="button" class="primary-button mobile-order-bar-charge" id="mobileBarChargeBtn" data-perm="charge" disabled>Cobrar</button>
+          </div>
+        </div>
         <section class="ticket-panel"><div class="ticket-head"><span>CUENTA ACTUAL</span><button id="deleteOrderButton" class="danger-link" data-perm="cancelOrder">Eliminar</button></div><div id="ticketItems" class="ticket-items"></div><div class="ticket-note"><label for="orderNote">Nota del pedido</label><textarea id="orderNote" rows="2" placeholder="Ej. cliente frecuente, mesa compartida…"></textarea></div><p id="paidNote" class="paid-note" hidden></p><div class="ticket-total"><span>Total</span><strong id="orderTotal">$0</strong></div><div class="ticket-actions"><button id="splitBillButton" class="outline-button" data-perm="charge">Dividir cuenta</button><button id="saveOrderButton" class="outline-button">Guardar pedido</button><button id="chargeButton" class="primary-button" data-perm="charge">Cobrar</button></div></section>
       </div>
     </dialog>
@@ -551,6 +570,26 @@
     </dialog>
 
     <div id="toast" class="toast" role="status"></div>
+
+    <!-- Cajón de navegación móvil -->
+    <div id="mobileMenuOverlay" class="mobile-overlay" aria-hidden="true"></div>
+    <aside id="mobileDrawer" class="mobile-drawer" aria-hidden="true">
+      <div class="mobile-drawer-header">
+        <span id="mobileDrawerBrand">NexoBar</span>
+        <button id="btn-close-drawer" class="mobile-drawer-close" aria-label="Cerrar menú">&#10005;</button>
+      </div>
+      <nav class="mobile-nav" aria-label="Navegación móvil">
+        <button class="nav-link active" data-view="pos" data-perm="view.pos"><span>&#127974;</span> Punto de venta</button>
+        <button class="nav-link" data-view="invoices" data-perm="view.invoices"><span>&#128196;</span> Facturas</button>
+        <button class="nav-link" data-view="products" data-perm="view.products"><span>&#127865;</span> Productos</button>
+        <button class="nav-link" data-view="inventory" data-perm="view.inventory"><span>&#128230;</span> Inventario</button>
+        <button class="nav-link" data-view="purchases" data-perm="view.purchases"><span>&#128722;</span> Compras y gastos</button>
+        <button class="nav-link" data-view="reports" data-perm="view.reports"><span>&#128202;</span> Reportes</button>
+        <button class="nav-link" data-view="profile" data-perm="view.profile"><span>&#127960;</span> Mi negocio</button>
+        <button class="nav-link" data-view="team" data-perm="view.team"><span>&#128101;</span> Equipo</button>
+      </nav>
+      <button id="mobileShiftBtn" class="mobile-shift-bar closed">Caja cerrada</button>
+    </aside>
     <script src="./xlsx.full.min.js"></script>
     <script src="./storage.js"></script>
     <script src="./modules.js"></script>

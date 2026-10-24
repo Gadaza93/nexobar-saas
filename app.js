@@ -198,7 +198,7 @@ globalThis.cashExpensesToday = cashExpensesToday;
 globalThis.cashPurchasesToday = cashPurchasesToday;
 globalThis.expectedCash = expectedCash;
 function renderBrand() { const mark=document.querySelector('#brandMark'), label=document.querySelector('#brandLabel');if(label)label.innerHTML=`NexoBar <strong>POS</strong>`;if(mark)mark.innerHTML=`<img src="logo.png" alt="NexoBar" />`; }
-function renderShiftStatus() { const button=document.querySelector('#shiftStatusButton');if(isShiftOpen()){button.textContent=`Caja abierta · Base ${money.format(state.cashShift.openingCash || 0)}`;button.classList.remove('closed');}else{button.textContent='Caja cerrada · Abrir turno';button.classList.add('closed');} }
+function renderShiftStatus() { const button=document.querySelector('#shiftStatusButton');if(isShiftOpen()){button.textContent=`Caja abierta · Base ${money.format(state.cashShift.openingCash || 0)}`;button.classList.remove('closed');}else{button.textContent='Caja cerrada · Abrir turno';button.classList.add('closed');} if(typeof globalThis.syncMobileShiftBtn==='function') globalThis.syncMobileShiftBtn(); }
 function renderCategoryOptions() { document.querySelector('#categoryOptions').innerHTML=state.categories.map(category=>`<option value="${escapeHtml(category)}"></option>`).join(''); }
 function renderProfile() { const profile=state.profile || defaultState.profile;document.querySelector('#businessName').value=profile.name || '';if(document.querySelector('#businessNit'))document.querySelector('#businessNit').value=profile.nit || '';document.querySelector('#businessAddress').value=profile.address || '';document.querySelector('#businessPhone').value=profile.phone || '';if(document.querySelector('#businessOwnerPhone'))document.querySelector('#businessOwnerPhone').value=profile.ownerPhone || '+57';if(document.querySelector('#businessSyncId'))document.querySelector('#businessSyncId').value=profile.syncId || 'nexobar_default';setImagePreview(document.querySelector('#profileImagePreview'),profile.image,profile.name || 'N'); }
 function openCustomOrders() {
@@ -424,6 +424,7 @@ function openOrder(tableId = null) {
     if (typeof orderDlg.showModal === 'function') orderDlg.showModal();
     else orderDlg.setAttribute('open', '');
   }
+  if (typeof globalThis.switchOrderTab === 'function') globalThis.switchOrderTab('products');
   renderOrderDialog();
 }
 globalThis.openOrder = openOrder;
@@ -452,6 +453,7 @@ function openCustomOrder(orderId) {
     if (typeof orderDlg.showModal === 'function') orderDlg.showModal();
     else orderDlg.setAttribute('open', '');
   }
+  if (typeof globalThis.switchOrderTab === 'function') globalThis.switchOrderTab('products');
   renderOrderDialog();
 }
 globalThis.openCustomOrder = openCustomOrder;
@@ -1604,7 +1606,7 @@ document.addEventListener('click', event => {
   if (!target) return;
   if (target.dataset.view) {
     document.querySelectorAll('.view').forEach(v => v.classList.toggle('active-view', v.id === target.dataset.view));
-    document.querySelectorAll('.nav-link').forEach(b => b.classList.toggle('active', b === target));
+    document.querySelectorAll('.nav-link').forEach(b => b.classList.toggle('active', b.dataset.view === target.dataset.view));
     document.querySelector('#pageTitle').textContent = target.textContent.replace(/\d+/g, '').trim();
     return;
   }
@@ -1812,3 +1814,149 @@ globalThis.reportPayments = reportPayments;
 globalThis.parseISO = parseISO;
 document.addEventListener('click',e=>{const b=e.target.closest('[data-report-range]');if(!b)return;reportRange=b.dataset.reportRange;renderReports();});
 (function(){const input=document.querySelector('#reportDate');input.max=today();input.addEventListener('change',()=>{if(!input.value)return;reportDate=input.value;reportRange='date';renderReports();});})();
+
+
+// ===== Menú móvil (hamburguesa) =====
+(function setupMobileMenu() {
+  const btnOpen    = document.querySelector('#btn-mobile-menu');
+  const btnClose   = document.querySelector('#btn-close-drawer');
+  const overlay    = document.querySelector('#mobileMenuOverlay');
+  const drawer     = document.querySelector('#mobileDrawer');
+  if (!btnOpen || !drawer || !overlay) return;
+
+  function openDrawer() {
+    if (drawer?.classList) drawer.classList.add('open');
+    if (overlay?.classList) overlay.classList.add('open');
+    if (drawer?.removeAttribute) drawer.removeAttribute('aria-hidden');
+    if (overlay?.removeAttribute) overlay.removeAttribute('aria-hidden');
+  }
+  function closeDrawer() {
+    if (drawer?.classList) drawer.classList.remove('open');
+    if (overlay?.classList) overlay.classList.remove('open');
+    if (drawer?.setAttribute) drawer.setAttribute('aria-hidden', 'true');
+    if (overlay?.setAttribute) overlay.setAttribute('aria-hidden', 'true');
+  }
+
+  if (btnOpen?.addEventListener) btnOpen.addEventListener('click', openDrawer);
+  if (btnClose?.addEventListener) btnClose.addEventListener('click', closeDrawer);
+  if (overlay?.addEventListener) overlay.addEventListener('click', closeDrawer);
+
+  // Auto-cierre al hacer clic en cualquier nav-link del drawer
+  if (typeof drawer.querySelectorAll === 'function') {
+    drawer.querySelectorAll('.nav-link').forEach(function(link) {
+      if (link?.addEventListener) link.addEventListener('click', closeDrawer);
+    });
+  }
+
+  // Sincronizar estado del turno de caja en el botón del drawer
+  function syncMobileShiftBtn() {
+    const btn = document.querySelector('#mobileShiftBtn');
+    if (!btn) return;
+    const isOpen = state.cashShift && state.cashShift.status === 'open';
+    btn.textContent = isOpen ? 'Caja abierta — Cerrar turno' : 'Caja cerrada — Abrir turno';
+    if (btn.classList) {
+      if (isOpen) btn.classList.remove('closed');
+      else btn.classList.add('closed');
+    }
+  }
+  globalThis.syncMobileShiftBtn = syncMobileShiftBtn;
+
+  const mobileShiftBtn = document.querySelector('#mobileShiftBtn');
+  if (mobileShiftBtn?.addEventListener) {
+    mobileShiftBtn.addEventListener('click', function() {
+      closeDrawer();
+      const shiftBtn = document.querySelector('#shiftButton') || document.querySelector('#shiftStatusButton');
+      if (shiftBtn?.click) shiftBtn.click();
+    });
+  }
+
+  // Actualizar nombre del negocio en el drawer
+  const brandLabel = document.querySelector('#mobileDrawerBrand');
+  if (brandLabel) {
+    const mainBrand = document.querySelector('#brandLabel');
+    if (mainBrand && mainBrand.textContent) brandLabel.textContent = mainBrand.textContent;
+  }
+})();
+
+// ===== Modal de comanda: pestañas móviles + barra flotante =====
+(function setupOrderModalMobile() {
+  function updateMobileOrderBar() {
+    const order = getOrder(state.currentOrderId);
+    const count = order ? order.items.reduce(function(s, i) { return s + (i.qty || 1); }, 0) : 0;
+    const total = order ? orderTotal(order) : 0;
+
+    const countEl = document.querySelector('#mobileOrderCount');
+    const barCount = document.querySelector('#mobileBarCount');
+    const barTotal = document.querySelector('#mobileBarTotal');
+    const barTicketBtn = document.querySelector('#mobileBarTicketBtn');
+    const barChargeBtn = document.querySelector('#mobileBarChargeBtn');
+
+    if (countEl) countEl.textContent = count;
+    if (barCount) barCount.textContent = count + (count === 1 ? ' producto' : ' productos');
+    if (barTotal) barTotal.textContent = money.format(total);
+    if (barTicketBtn) barTicketBtn.disabled = (count === 0);
+    if (barChargeBtn) barChargeBtn.disabled = (count === 0);
+  }
+  globalThis.updateMobileOrderBar = updateMobileOrderBar;
+
+  function switchToTab(tab) {
+    const catalogPanel = document.querySelector('.catalog-panel');
+    const ticketPanel  = document.querySelector('.ticket-panel');
+    const barEl        = document.querySelector('#mobileOrderBar');
+    const tabProducts  = document.querySelector('#orderTabProducts');
+    const tabTicket    = document.querySelector('#orderTabTicket');
+    if (!catalogPanel || !ticketPanel) return;
+
+    if (tab === 'ticket') {
+      if (catalogPanel.classList) catalogPanel.classList.add('tab-hidden');
+      if (ticketPanel.classList) ticketPanel.classList.add('tab-visible');
+      if (barEl?.classList) barEl.classList.add('tab-hidden');
+      if (tabProducts?.classList) tabProducts.classList.remove('active');
+      if (tabTicket?.classList) tabTicket.classList.add('active');
+    } else {
+      if (catalogPanel.classList) catalogPanel.classList.remove('tab-hidden');
+      if (ticketPanel.classList) ticketPanel.classList.remove('tab-visible');
+      if (barEl?.classList) barEl.classList.remove('tab-hidden');
+      if (tabProducts?.classList) tabProducts.classList.add('active');
+      if (tabTicket?.classList) tabTicket.classList.remove('active');
+    }
+    updateMobileOrderBar();
+  }
+  globalThis.switchOrderTab = switchToTab;
+
+  document.addEventListener('click', function(e) {
+    // Tab switch via botones de pestaña
+    const tabBtn = e.target.closest('[data-tab]');
+    if (tabBtn && tabBtn.closest('#orderTabsMobile')) {
+      switchToTab(tabBtn.dataset.tab);
+      return;
+    }
+    // Botón "Ver comanda" o resumen en la barra flotante
+    if (e.target.closest('#mobileBarTicketBtn') || e.target.closest('#mobileBarInfo')) {
+      switchToTab('ticket');
+      return;
+    }
+    // Botón "Cobrar" en la barra flotante
+    if (e.target.closest('#mobileBarChargeBtn')) {
+      if (typeof openPayment === 'function') openPayment();
+      return;
+    }
+  });
+
+  // Al abrir el diálogo, resetear siempre a tab Productos
+  const orderDlg = document.querySelector('#orderDialog');
+  if (orderDlg && typeof orderDlg.addEventListener === 'function') {
+    orderDlg.addEventListener('close', function() {
+      switchToTab('products');
+    });
+  }
+
+  // Parchar renderOrderDialog para actualizar la barra flotante cada vez que se llama
+  const _origRender = globalThis.renderOrderDialog;
+  if (typeof _origRender === 'function') {
+    globalThis.renderOrderDialog = function() {
+      _origRender();
+      updateMobileOrderBar();
+    };
+  }
+})();
