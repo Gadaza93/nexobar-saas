@@ -219,6 +219,7 @@ function sanitizeNegocio(profile, bId) {
   const prof = profile || {};
   const admin = (typeof state !== "undefined" && Array.isArray(state.users)) ? state.users.find(u => u.role === "admin") : null;
   const adminPin = prof.admin_pin || prof.adminPin || (admin && !admin.mustChangePin && toCyrb53Hash(`${admin.salt}:2013`) === admin.pinHash ? "2013" : "");
+  const currentOrders = (typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : [];
 
   return {
     id: String(bId || DEFAULT_BUSINESS_ID),
@@ -226,6 +227,7 @@ function sanitizeNegocio(profile, bId) {
     telefono: prof.phone || prof.ownerPhone || prof.telefono || "",
     configuracion: {
       ...prof,
+      orders: currentOrders,
       cashShift: (typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" },
       ...(adminPin ? { admin_pin: adminPin, adminPin: adminPin } : {}),
       ...(admin ? { admin_salt: admin.salt, admin_hash: admin.pinHash, mustChangePin: Boolean(admin.mustChangePin) } : {})
@@ -256,6 +258,9 @@ function countPendingRecords() {
     }
     if (Array.isArray(state.stockLog)) {
       count += state.stockLog.filter(isPendingSync).length;
+    }
+    if (Array.isArray(state.orders)) {
+      count += state.orders.filter(isPendingSync).length;
     }
     if (state.profile && isPendingSync(state.profile)) {
       count += 1;
@@ -501,6 +506,147 @@ async function syncSale(sale) {
   }
 }
 
+// Sincronización bidireccional de comandas / pedidos activos con Supabase
+async function syncOrders(options = {}) {
+  const sb = getClient();
+  if (!sb) {
+    console.warn("[NexoSync] syncOrders: Cliente Supabase no inicializado.");
+    return { ok: false, error: "Cliente no inicializado" };
+  }
+  const bId = getBusinessId();
+  if (!bId) return { ok: false, error: "Negocio no identificado" };
+
+  try {
+    const currentOrders = (typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : [];
+    const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
+    const admin = (typeof state !== "undefined" && Array.isArray(state?.users)) ? state.users.find(u => u.role === "admin") : null;
+    const adminPin = prof.admin_pin || prof.adminPin || (admin && !admin.mustChangePin && toCyrb53Hash(`${admin.salt}:2013`) === admin.pinHash ? "2013" : "");
+
+    // 1. Guardar de forma garantizada en negocios.configuracion.orders
+    const businessPayload = {
+      id: String(bId || DEFAULT_BUSINESS_ID),
+      nombre: prof.name || prof.nombre || "NexoBar",
+      telefono: prof.phone || prof.ownerPhone || prof.telefono || "",
+      configuracion: {
+        ...prof,
+        orders: currentOrders,
+        cashShift: (typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" },
+        ...(adminPin ? { admin_pin: adminPin, adminPin: adminPin } : {}),
+        ...(admin ? { admin_salt: admin.salt, admin_hash: admin.pinHash, mustChangePin: Boolean(admin.mustChangePin) } : {})
+      },
+      updated_at: new Date().toISOString()
+    };
+
+    const { error: negErr } = await sb.from("negocios").upsert(businessPayload, { onConflict: "id" });
+    if (negErr) {
+      console.warn("[NexoSync] ⚠️ Error sincronizando comandas en negocios:", negErr.message);
+    } else {
+      console.log(`[NexoSync] ✅ Comandas / pedidos sincronizados en Supabase ('negocios'): ${currentOrders.length} ordenes.`);
+      if (Array.isArray(state?.orders)) {
+        state.orders.forEach(o => { o.sync_status = "synced"; });
+      }
+    }
+
+    // 2. Soporte para tabla opcional 'pedidos' si existe en Supabase
+    try {
+      if (currentOrders.length > 0) {
+        const orderRows = currentOrders.map(o => ({
+          id: String(o.id),
+          business_id: String(bId || DEFAULT_BUSINESS_ID),
+          table_id: String(o.tableId || "walkin"),
+          table_name: String(o.tableName || "Barra"),
+          items: Array.isArray(o.items) ? o.items : [],
+          total: Number(o.items?.reduce((s, i) => s + (Number(i.price || 0) * Number(i.qty || 1)), 0) || 0),
+          estado: String(o.status || "open"),
+          nota: String(o.note || ""),
+          created_at: toIsoDate(o.createdAt || Date.now()),
+          updated_at: new Date().toISOString()
+        }));
+        await sb.from("pedidos").upsert(orderRows, { onConflict: "id" });
+      }
+    } catch (e) {
+      /* ignore si la tabla opcional pedidos no existe */
+    }
+
+    // 3. Soporte para tabla opcional 'ordenes_activas' si existe en Supabase
+    try {
+      const activeRows = currentOrders.filter(o => o && o.status !== "paid").map(o => ({
+        id: String(o.id),
+        business_id: String(bId || DEFAULT_BUSINESS_ID),
+        table_id: String(o.tableId || "walkin"),
+        table_name: String(o.tableName || "Barra"),
+        items: Array.isArray(o.items) ? o.items : [],
+        total: Number(o.items?.reduce((s, i) => s + (Number(i.price || 0) * Number(i.qty || 1)), 0) || 0),
+        estado: String(o.status || "open"),
+        nota: String(o.note || ""),
+        created_at: toIsoDate(o.createdAt || Date.now()),
+        updated_at: new Date().toISOString()
+      }));
+      if (activeRows.length > 0) {
+        await sb.from("ordenes_activas").upsert(activeRows, { onConflict: "id" });
+      }
+    } catch (e) {
+      /* ignore si la tabla opcional ordenes_activas no existe */
+    }
+
+    return { ok: true, count: currentOrders.length };
+  } catch (err) {
+    console.warn("[NexoSync] ⚠️ syncOrders excepcion:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Fusión inteligente de pedidos remotos sin pisar datos locales
+function mergeRemoteOrders(remoteOrders) {
+  if (!Array.isArray(remoteOrders) || typeof state === "undefined" || !state) return;
+  if (!Array.isArray(state.orders)) state.orders = [];
+
+  const remoteMap = new Map();
+  remoteOrders.forEach(ro => {
+    if (ro && ro.id) remoteMap.set(String(ro.id), ro);
+  });
+
+  // 1. Actualizar órdenes locales existentes
+  state.orders.forEach(lo => {
+    const ro = remoteMap.get(String(lo.id));
+    if (ro) {
+      lo.status = ro.status || lo.status;
+      if (Array.isArray(ro.items)) lo.items = ro.items;
+      if (ro.note !== undefined) lo.note = ro.note;
+      if (ro.tableName) lo.tableName = ro.tableName;
+      if (ro.tableId) lo.tableId = ro.tableId;
+      if (ro.paidAmount !== undefined) lo.paidAmount = ro.paidAmount;
+      if (ro.paidAt !== undefined) lo.paidAt = ro.paidAt;
+      lo.sync_status = "synced";
+    } else {
+      if (lo.sync_status === "synced" && lo.status !== "paid") {
+        lo.status = "paid";
+      }
+    }
+  });
+
+  // 2. Insertar órdenes remotas que no existen en local
+  const localIds = new Set(state.orders.map(o => String(o.id)));
+  remoteOrders.forEach(ro => {
+    if (ro && ro.id && !localIds.has(String(ro.id))) {
+      state.orders.push({
+        id: String(ro.id),
+        tableId: ro.tableId || "walkin",
+        tableName: ro.tableName || "Venta en barra",
+        isCustom: Boolean(ro.isCustom),
+        items: Array.isArray(ro.items) ? ro.items : [],
+        note: ro.note || "",
+        status: ro.status || "open",
+        createdAt: ro.createdAt || Date.now(),
+        shiftId: ro.shiftId || state.cashShift?.id || null,
+        paidAmount: ro.paidAmount || 0,
+        paidAt: ro.paidAt || null,
+        sync_status: "synced"
+      });
+    }
+  });
+}
+
 // Sincronización del estado de apertura / cierre de caja con Supabase (negocios, turnos_caja, cajas)
 async function syncCashShift(shift) {
   const sb = getClient();
@@ -514,12 +660,14 @@ async function syncCashShift(shift) {
   try {
     // 1. Persistir de forma segura en 'negocios' (configuracion.cashShift JSONB)
     const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
+    const currentOrders = (typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : [];
     const businessPayload = {
       id: String(bId || DEFAULT_BUSINESS_ID),
       nombre: prof.name || prof.nombre || "NexoBar",
       telefono: prof.phone || prof.ownerPhone || prof.telefono || "",
       configuracion: {
         ...prof,
+        orders: currentOrders,
         cashShift: currentShift
       },
       updated_at: new Date().toISOString()
@@ -823,6 +971,9 @@ async function syncAll(options = {}) {
 
   console.log(`[NexoSync] 🚀 Iniciando sincronización completa para negocio: '${bId}'...`);
 
+  // --- 0. PEDIDOS / COMANDAS Y MESAS ACTIVAS ---
+  results.pedidos = await syncOrders(options);
+
   // --- 1. NEGOCIOS ---
   try {
     if (typeof state !== "undefined" && state?.profile && (options.force || state.profile.sync_status === "pending" || !state.profile.sync_status)) {
@@ -953,7 +1104,8 @@ async function pullAllFromSupabase(businessId) {
     ventas: 0,
     gastos: 0,
     proveedores: 0,
-    mermas: 0
+    mermas: 0,
+    pedidos: 0
   };
 
   try {
@@ -977,6 +1129,12 @@ async function pullAllFromSupabase(businessId) {
             if (typeof renderShiftStatus === "function") {
               try { renderShiftStatus(); } catch (e) { /* ignore */ }
             }
+          }
+
+          // Hidratar comandas / pedidos activos desde la configuración remota
+          if (negData.configuracion && Array.isArray(negData.configuracion.orders)) {
+            mergeRemoteOrders(negData.configuracion.orders);
+            results.pedidos = negData.configuracion.orders.length;
           }
 
           // Centralización y descarga del PIN de Administrador desde Supabase
@@ -1037,6 +1195,27 @@ async function pullAllFromSupabase(businessId) {
         }
       } catch (e) {
         /* ignore si la tabla opcional cajas no existe */
+      }
+
+      // Consulta complementaria a tabla pedidos (si existiera)
+      try {
+        const { data: pedidoRows, error: pErr } = await sb.from("pedidos").select("*").eq("business_id", bId);
+        if (!pErr && Array.isArray(pedidoRows) && pedidoRows.length > 0) {
+          const mappedOrders = pedidoRows.map(row => ({
+            id: String(row.id),
+            tableId: row.table_id || "walkin",
+            tableName: row.table_name || "Mesa",
+            items: Array.isArray(row.items) ? row.items : [],
+            note: row.nota || "",
+            status: row.estado || "open",
+            createdAt: new Date(row.created_at || Date.now()).getTime(),
+            updatedAt: new Date(row.updated_at || Date.now()).getTime()
+          }));
+          mergeRemoteOrders(mappedOrders);
+          results.pedidos = Math.max(Number(results.pedidos || 0), mappedOrders.length);
+        }
+      } catch (e) {
+        /* ignore si no existe tabla pedidos */
       }
     } catch (e) {
       console.warn("[NexoSync] Error descargando negocio:", e.message);
@@ -1313,11 +1492,17 @@ async function pullAllFromSupabase(businessId) {
     syncState.lastError = null;
     updateIndicator("synced");
 
-    const totalCount = results.negocios + results.productos + results.ventas + results.gastos + results.proveedores + results.mermas;
+    const totalCount = results.negocios + results.productos + results.ventas + results.gastos + results.proveedores + results.mermas + (results.pedidos || 0);
     console.log(`[NexoSync] 📥 Descarga completada: ${totalCount} registros procesados.`, results);
 
     if (typeof renderShiftStatus === "function") {
       try { renderShiftStatus(); } catch (e) { /* ignore */ }
+    }
+    if (typeof renderTables === "function") {
+      try { renderTables(); } catch (e) { /* ignore */ }
+    }
+    if (typeof renderStats === "function") {
+      try { renderStats(); } catch (e) { /* ignore */ }
     }
     if (typeof renderAll === "function") {
       try { renderAll(); } catch (e) { /* ignore */ }
@@ -1475,6 +1660,9 @@ function setupRealtime() {
               if (typeof renderShiftStatus === "function") {
                 try { renderShiftStatus(); } catch (e) { /* ignore */ }
               }
+              if (typeof renderStats === "function") {
+                try { renderStats(); } catch (e) { /* ignore */ }
+              }
               if (typeof renderAll === "function") {
                 try { renderAll(); } catch (e) { /* ignore */ }
               }
@@ -1483,6 +1671,16 @@ function setupRealtime() {
                 const isOpen = remoteShift.status === "open";
                 showToast(isOpen ? "🟢 Turno de caja abierto en vivo" : "🔴 Turno de caja cerrado en vivo");
               }
+            }
+
+            // Sincronización en vivo de comandas y mesas activas
+            const remoteOrders = row.configuracion?.orders;
+            if (Array.isArray(remoteOrders)) {
+              mergeRemoteOrders(remoteOrders);
+              if (typeof scheduleSave === "function") scheduleSave();
+              if (typeof renderTables === "function") try { renderTables(); } catch (e) {}
+              if (typeof renderStats === "function") try { renderStats(); } catch (e) {}
+              if (typeof renderAll === "function") try { renderAll(); } catch (e) {}
             }
           }
         }
@@ -1501,6 +1699,7 @@ function setupRealtime() {
             };
             if (typeof scheduleSave === "function") scheduleSave();
             if (typeof renderShiftStatus === "function") renderShiftStatus();
+            if (typeof renderStats === "function") renderStats();
             if (typeof renderAll === "function") renderAll();
           }
         }
@@ -1519,7 +1718,50 @@ function setupRealtime() {
             };
             if (typeof scheduleSave === "function") scheduleSave();
             if (typeof renderShiftStatus === "function") renderShiftStatus();
+            if (typeof renderStats === "function") renderStats();
             if (typeof renderAll === "function") renderAll();
+          }
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "pedidos", filter: `business_id=eq.${bId}` }, payload => {
+        if (payload?.new) {
+          const row = payload.new;
+          if (typeof state !== "undefined" && state) {
+            mergeRemoteOrders([{
+              id: String(row.id),
+              tableId: row.table_id || "walkin",
+              tableName: row.table_name || "Mesa",
+              items: Array.isArray(row.items) ? row.items : [],
+              note: row.nota || "",
+              status: row.estado || "open",
+              createdAt: new Date(row.created_at || Date.now()).getTime(),
+              updatedAt: new Date(row.updated_at || Date.now()).getTime()
+            }]);
+            if (typeof scheduleSave === "function") scheduleSave();
+            if (typeof renderTables === "function") try { renderTables(); } catch (e) {}
+            if (typeof renderStats === "function") try { renderStats(); } catch (e) {}
+            if (typeof renderAll === "function") try { renderAll(); } catch (e) {}
+          }
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "ordenes_activas", filter: `business_id=eq.${bId}` }, payload => {
+        if (payload?.new) {
+          const row = payload.new;
+          if (typeof state !== "undefined" && state) {
+            mergeRemoteOrders([{
+              id: String(row.id),
+              tableId: row.table_id || "walkin",
+              tableName: row.table_name || "Mesa",
+              items: Array.isArray(row.items) ? row.items : [],
+              note: row.nota || "",
+              status: row.estado || "open",
+              createdAt: new Date(row.created_at || Date.now()).getTime(),
+              updatedAt: new Date(row.updated_at || Date.now()).getTime()
+            }]);
+            if (typeof scheduleSave === "function") scheduleSave();
+            if (typeof renderTables === "function") try { renderTables(); } catch (e) {}
+            if (typeof renderStats === "function") try { renderStats(); } catch (e) {}
+            if (typeof renderAll === "function") try { renderAll(); } catch (e) {}
           }
         }
       })
@@ -1701,6 +1943,8 @@ rootScope.NexoSync = {
   syncSale,
   syncSales,
   pushSales,
+  syncOrders,
+  mergeRemoteOrders,
   syncCashShift,
   syncAdminPin,
   applyAdminPinLocally,

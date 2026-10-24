@@ -560,7 +560,7 @@ function deleteCurrentOrder() {
   const order = getOrder(state.currentOrderId); if (!order) return;
   if (order.items.length && !window.confirm(`¿Eliminar el pedido de ${order.tableName} por ${money.format(orderTotal(order))}?`)) return;
   logAudit('Pedido eliminado', `${order.tableName} · ${money.format(orderTotal(order))} · ${order.items.length} productos`, { data: structuredClone(order) });
-  state.orders = state.orders.filter(o => o.id !== order.id); saveState(); document.querySelector('#orderDialog').close(); state.currentOrderId = null; renderAll(); showToast('Pedido eliminado.');
+  state.orders = state.orders.filter(o => o.id !== order.id); saveState(); if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {}); document.querySelector('#orderDialog').close(); state.currentOrderId = null; renderAll(); showToast('Pedido eliminado.');
 }
 
 /* ============ Reportes analíticos ============ */
