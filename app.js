@@ -1,5 +1,6 @@
 /* NexoBar: POS Inteligente para Bares. Toda la información se guarda en el navegador. */
 const money = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 });
+globalThis.money = money;
 const defaultState = {
   zone: 'Todas', activeCategory: 'Todos', search: '', currentOrderId: null, paymentMethod: 'Efectivo',
   categories: ['Cervezas', 'Cocteles', 'Licores', 'Sin alcohol', 'Comidas', 'Otros'],
@@ -84,9 +85,20 @@ function normalizeState(saved) {
     });
   }
 
-  normalized.orders = (saved?.orders || []).map(order => ({
+  const validTableIds = new Set((saved?.tables || defaultState.tables || []).map(t => t.id));
+  normalized.orders = (saved?.orders || []).filter(order => {
+    if (!order) return false;
+    const st = String(order.status || '').toLowerCase();
+    const isPaid = st === 'paid' || st === 'closed' || st === 'cerrada' || st === 'cancelada';
+    if (isPaid) return false;
+    const hasItems = Array.isArray(order.items) && order.items.length > 0 && order.items.some(i => (Number(i.qty) || 0) > 0);
+    if (!hasItems) return false;
+    const isKnownTable = validTableIds.has(order.tableId);
+    const isKnownCustom = Boolean(order.isCustom) || order.tableId === 'walkin';
+    return isKnownTable || isKnownCustom;
+  }).map(order => ({
     ...order,
-    status: order.status === 'paid' ? 'paid' : 'open',
+    status: 'open',
     items: (order.items || []).map(item => {
       const product = normalized.products.find(p => p.id === item.productId);
       return { ...item, inventoryId: item.inventoryId || product?.inventoryId, cost: Number(item.cost ?? product?.cost ?? 0) };
@@ -106,11 +118,51 @@ globalThis.saveState = saveState;
 function localISO(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function today() { return localISO(new Date()); }
 function displayDate() { return new Intl.DateTimeFormat('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date()).replace(/^./, c => c.toUpperCase()); }
-function getOrder(id) { return state.orders.find(o => o.id === id); }
-function activeOrderForTable(tableId) { return state.orders.find(o => o.tableId === tableId && o.status !== 'paid'); }
-function orderTotal(order) { return order.items.reduce((sum, item) => sum + item.price * item.qty, 0); }
-function activeOrders() { return state.orders.filter(o => o.status !== 'paid'); }
+function getOrder(id) { return (state.orders || []).find(o => o.id === id); }
+function isOrderOpen(order) {
+  if (!order) return false;
+  const st = String(order.status || '').toLowerCase();
+  const isOpen = st === 'open' || st === 'abierto' || st === 'pendiente';
+  if (!isOpen || st === 'paid' || st === 'closed' || st === 'cerrada' || st === 'cancelada') return false;
+  if (!Array.isArray(order.items) || order.items.length === 0) return false;
+  return order.items.some(i => (Number(i.qty) || 0) > 0);
+}
+function activeOrders() { return (state.orders || []).filter(isOrderOpen); }
+function activeOrderForTable(tableId) { return (state.orders || []).find(o => o.tableId === tableId && isOrderOpen(o)); }
+function orderTotal(order) {
+  if (!order || !Array.isArray(order.items)) return 0;
+  return order.items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
+}
 function paymentsToday() { return state.payments.filter(p => p.date === today()); }
+function cleanupOrphanOrders() {
+  if (!state || !Array.isArray(state.orders)) return;
+  const validTableIds = new Set((state.tables || []).map(t => t.id));
+  const prevCount = state.orders.length;
+  state.orders = state.orders.filter(order => {
+    if (!order) return false;
+    const st = String(order.status || '').toLowerCase();
+    const isPaid = (st === 'paid' || st === 'closed' || st === 'cerrada' || st === 'cancelada');
+    if (isPaid) return false;
+    const hasItems = Array.isArray(order.items) && order.items.length > 0 && order.items.some(i => (Number(i.qty) || 0) > 0);
+    if (!hasItems) return false;
+    const isKnownTable = validTableIds.has(order.tableId);
+    const isKnownCustom = Boolean(order.isCustom) || order.tableId === 'walkin';
+    return isKnownTable || isKnownCustom;
+  });
+  if (state.orders.length !== prevCount) {
+    saveState();
+  }
+}
+globalThis.cleanupOrphanOrders = cleanupOrphanOrders;
+globalThis.localISO = localISO;
+globalThis.today = today;
+globalThis.displayDate = displayDate;
+globalThis.getOrder = getOrder;
+globalThis.isOrderOpen = isOrderOpen;
+globalThis.activeOrders = activeOrders;
+globalThis.activeOrderForTable = activeOrderForTable;
+globalThis.orderTotal = orderTotal;
+globalThis.paymentsToday = paymentsToday;
 function formatQty(value) { return Number.isInteger(value) ? value : value.toFixed(1).replace('.', ','); }
 function formatDate(date) { const d = new Date(`${date}T12:00:00`); return Number.isNaN(d.getTime()) ? '—' : new Intl.DateTimeFormat('es-CO', { day:'2-digit', month:'short' }).format(d); }
 function uid(prefix) { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
@@ -135,12 +187,39 @@ function otherSalesToday() {
 }
 function cashExpensesToday() { return state.expenses.filter(expense=>expense.shiftId===state.cashShift?.id&&expense.method==='Efectivo').reduce((sum,expense)=>sum+expense.amount,0); }
 function cashPurchasesToday() { return state.purchases.filter(purchase=>purchase.shiftId===state.cashShift?.id&&purchase.method==='Efectivo').reduce((sum,purchase)=>sum+purchase.total,0); }
-function expectedCash() { return Number(state.cashShift?.openingCash || 0)+cashSalesToday()-cashExpensesToday()-cashPurchasesToday(); }
+function expectedCash() { if (!isShiftOpen()) return 0; return Number(state.cashShift?.openingCash || 0)+cashSalesToday()-cashExpensesToday()-cashPurchasesToday(); }
+globalThis.formatQty = formatQty;
+globalThis.formatDate = formatDate;
+globalThis.isShiftOpen = isShiftOpen;
+globalThis.currentShiftPayments = currentShiftPayments;
+globalThis.cashSalesToday = cashSalesToday;
+globalThis.otherSalesToday = otherSalesToday;
+globalThis.cashExpensesToday = cashExpensesToday;
+globalThis.cashPurchasesToday = cashPurchasesToday;
+globalThis.expectedCash = expectedCash;
 function renderBrand() { const mark=document.querySelector('#brandMark'), label=document.querySelector('#brandLabel');if(label)label.innerHTML=`NexoBar <strong>POS</strong>`;if(mark)mark.innerHTML=`<img src="logo.png" alt="NexoBar" />`; }
 function renderShiftStatus() { const button=document.querySelector('#shiftStatusButton');if(isShiftOpen()){button.textContent=`Caja abierta · Base ${money.format(state.cashShift.openingCash || 0)}`;button.classList.remove('closed');}else{button.textContent='Caja cerrada · Abrir turno';button.classList.add('closed');} }
 function renderCategoryOptions() { document.querySelector('#categoryOptions').innerHTML=state.categories.map(category=>`<option value="${escapeHtml(category)}"></option>`).join(''); }
 function renderProfile() { const profile=state.profile || defaultState.profile;document.querySelector('#businessName').value=profile.name || '';if(document.querySelector('#businessNit'))document.querySelector('#businessNit').value=profile.nit || '';document.querySelector('#businessAddress').value=profile.address || '';document.querySelector('#businessPhone').value=profile.phone || '';if(document.querySelector('#businessOwnerPhone'))document.querySelector('#businessOwnerPhone').value=profile.ownerPhone || '+57';if(document.querySelector('#businessSyncId'))document.querySelector('#businessSyncId').value=profile.syncId || 'nexobar_default';setImagePreview(document.querySelector('#profileImagePreview'),profile.image,profile.name || 'N'); }
-function renderCustomOrders() { const orders=activeOrders().filter(order=>order.isCustom);document.querySelector('#customOrdersList').innerHTML=orders.length?orders.map(order=>`<button class="custom-order-card" data-open-custom-order="${order.id}"><strong>${escapeHtml(order.tableName)}</strong><span>${order.items.reduce((sum,item)=>sum+item.qty,0)} productos · cuenta abierta</span><b>${money.format(orderTotal(order))}</b></button>`).join(''):'<p class="muted">No hay cuentas personalizadas abiertas.</p>'; }
+function openCustomOrders() {
+  const tableIds = new Set((state.tables || []).map(t => t.id));
+  return activeOrders().filter(order => order.isCustom || order.tableId === 'walkin' || !tableIds.has(order.tableId));
+}
+function renderCustomOrders() {
+  const orders = openCustomOrders();
+  const listEl = document.querySelector('#customOrdersList');
+  if (!listEl) return;
+  if (!orders.length) {
+    listEl.innerHTML = '<p class="muted">No hay cuentas personalizadas ni pedidos en barra abiertos.</p>';
+    return;
+  }
+  listEl.innerHTML = orders.map(order => {
+    const totalItems = order.items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
+    const totalMoney = orderTotal(order);
+    const tag = order.isCustom ? 'Personalizada' : (order.tableId === 'walkin' ? 'Barra' : 'Comanda');
+    return `<div class="custom-order-card" data-order-card="${order.id}"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;"><div><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><strong>${escapeHtml(order.tableName || 'Cuenta')}</strong><span class="history-tag" style="font-size:9px;padding:2px 5px;">${tag}</span></div><span style="color:var(--muted);font-size:12px;margin-top:4px;display:block;">${totalItems} ${totalItems === 1 ? 'producto' : 'productos'} · ${elapsedLabel(order.createdAt)}</span></div><b style="color:var(--accent);font-size:15px;white-space:nowrap;">${money.format(totalMoney)}</b></div><div style="display:flex;gap:6px;margin-top:12px;"><button class="outline-button" style="flex:1;padding:6px 8px;font-size:12px;" data-open-custom-order="${order.id}">Ver / Editar</button><button class="primary-button" style="flex:1;padding:6px 8px;font-size:12px;" data-pay-custom-order="${order.id}">Cobrar</button><button class="remove-line" style="padding:4px 8px;" data-delete-custom-order="${order.id}" title="Anular cuenta">×</button></div></div>`;
+  }).join('');
+}
 function paymentTimestamp(payment) { return payment.paidAt || payment.createdAt || new Date(`${payment.date || today()}T12:00:00`).getTime(); }
 function invoiceReference(payment,index=0) { return payment.invoiceNo || `FAC-${String(index + 1).padStart(5,'0')}`; }
 function paymentTendersMarkup(payment) {
@@ -156,15 +235,53 @@ function invoiceItemsMarkup(payment) {
 }
 function setImagePreview(element,image,fallback) { element.innerHTML=image?`<img src="${image}" alt="Vista previa" />`:escapeHtml(String(fallback || 'N').charAt(0).toUpperCase()); }
 
-function renderAll() { document.querySelector('#todayLabel').textContent = displayDate().replace(/^./, c => c.toUpperCase()); renderBrand(); renderShiftStatus(); renderNavigation(); renderStats(); renderZones(); renderTables(); renderCustomOrders(); renderRecentInvoices(); renderCategoryOptions(); renderProducts(); renderInventory(); renderPurchases(); renderReports(); renderHistory(); renderProfile(); applyPermissions(); renderUserChip(); renderInvoices(); renderSuppliers(); renderStockLog(); renderTeam(); renderBackupCard(); }
+function renderAll() {
+  document.querySelector('#todayLabel').textContent = displayDate().replace(/^./, c => c.toUpperCase());
+  renderBrand();
+  renderShiftStatus();
+  renderNavigation();
+  renderStats();
+  renderZones();
+  renderTables();
+  renderCustomOrders();
+  if (typeof renderRecentInvoices === 'function') renderRecentInvoices(); else if (typeof globalThis.renderRecentInvoices === 'function') globalThis.renderRecentInvoices();
+  renderCategoryOptions();
+  renderProducts();
+  renderInventory();
+  renderPurchases();
+  if (typeof renderReports === 'function') renderReports(); else if (typeof globalThis.renderReports === 'function') globalThis.renderReports();
+  renderHistory();
+  renderProfile();
+  if (typeof applyPermissions === 'function') applyPermissions(); else if (typeof globalThis.applyPermissions === 'function') globalThis.applyPermissions();
+  if (typeof renderUserChip === 'function') renderUserChip(); else if (typeof globalThis.renderUserChip === 'function') globalThis.renderUserChip();
+  if (typeof renderInvoices === 'function') renderInvoices(); else if (typeof globalThis.renderInvoices === 'function') globalThis.renderInvoices();
+  if (typeof renderSuppliers === 'function') renderSuppliers(); else if (typeof globalThis.renderSuppliers === 'function') globalThis.renderSuppliers();
+  if (typeof renderStockLog === 'function') renderStockLog(); else if (typeof globalThis.renderStockLog === 'function') globalThis.renderStockLog();
+  if (typeof renderTeam === 'function') renderTeam(); else if (typeof globalThis.renderTeam === 'function') globalThis.renderTeam();
+  if (typeof renderBackupCard === 'function') renderBackupCard(); else if (typeof globalThis.renderBackupCard === 'function') globalThis.renderBackupCard();
+}
 function renderNavigation() { const low = state.inventory.filter(i => i.qty <= i.min).length; document.querySelector('#inventoryBadge').textContent = low; }
-function renderStats() { const payments = paymentsToday(); const sold = payments.reduce((s,p) => s+p.amount, 0); const active = activeOrders(); document.querySelector('#salesToday').textContent = money.format(sold); document.querySelector('#salesCount').textContent = `${payments.length} ${payments.length === 1 ? 'cuenta cerrada' : 'cuentas cerradas'}`; document.querySelector('#activeTables').textContent = active.filter(order=>!order.isCustom).length; document.querySelector('#activeItems').textContent = `${active.reduce((s,o)=>s+o.items.reduce((n,i)=>n+i.qty,0),0)} bebidas y snacks`; document.querySelector('#openOrdersCount').textContent = active.length; document.querySelector('#cashExpected').textContent = isShiftOpen() ? money.format(expectedCash()) : 'Caja cerrada'; }
+function renderStats() {
+  const payments = paymentsToday();
+  const sold = payments.reduce((s,p) => s+p.amount, 0);
+  const active = activeOrders();
+  const tableIds = new Set((state.tables || []).map(t => t.id));
+  const activeTableOrders = active.filter(order => !order.isCustom && order.tableId !== 'walkin' && tableIds.has(order.tableId));
+
+  document.querySelector('#salesToday').textContent = money.format(sold);
+  document.querySelector('#salesCount').textContent = `${payments.length} ${payments.length === 1 ? 'cuenta cerrada' : 'cuentas cerradas'}`;
+  document.querySelector('#activeTables').textContent = activeTableOrders.length;
+  document.querySelector('#activeItems').textContent = `${active.reduce((s,o)=>s+o.items.reduce((n,i)=>n+(Number(i.qty)||0),0),0)} bebidas y snacks`;
+  document.querySelector('#openOrdersCount').textContent = active.length;
+  document.querySelector('#cashExpected').textContent = isShiftOpen() ? money.format(expectedCash()) : 'Caja cerrada';
+}
 function renderZones() { const zones = ['Todas', ...new Set(state.tables.map(t => t.zone))]; document.querySelector('#zoneFilter').innerHTML = zones.map(z => `<button class="segment ${state.zone === z ? 'active':''}" data-zone="${z}">${z}</button>`).join(''); }
 function elapsedLabel(ts) { const mins = Math.max(0, Math.floor((Date.now() - (ts || Date.now())) / 60000)); if (mins < 1) return 'Recién abierta'; if (mins < 60) return `Abierta hace ${mins} min`; const h = Math.floor(mins / 60), m = mins % 60; return `Abierta hace ${h} h${m ? ` ${m} min` : ''}`; }
 function renderTables() { const tables = state.tables.filter(t => state.zone === 'Todas' || t.zone === state.zone); document.querySelector('#tableGrid').innerHTML = tables.map(table => { const order = activeOrderForTable(table.id); const long = order && Date.now() - (order.createdAt || Date.now()) >= 120 * 60000; return `<button class="table-card ${order ? 'occupied':''} ${table.type || ''}" data-table="${table.id}"><span class="table-top"><span class="table-name">${escapeHtml(table.name)}</span><span class="table-zone">${escapeHtml(table.zone)}</span></span>${order ? `<span class="table-bottom"><span class="table-amount">${money.format(orderTotal(order))}</span><span class="table-time ${long ? 'long' : ''}">${elapsedLabel(order.createdAt)}</span></span>` : '<span class="table-status empty">Disponible</span>'}</button>`; }).join(''); }
 globalThis.renderShiftStatus = renderShiftStatus;
 globalThis.renderStats = renderStats;
 globalThis.renderTables = renderTables;
+globalThis.renderCustomOrders = renderCustomOrders;
 globalThis.renderAll = renderAll;
 function renderInventory() {
   const lows = state.inventory.filter(i => i.qty <= i.min && i.qty > 0);
@@ -528,6 +645,9 @@ function confirmPayment() {
 
   state.payments.push(newPayment);
   saveState();
+  if (globalThis.NexoSync?.deleteActiveOrder) {
+    globalThis.NexoSync.deleteActiveOrder(order.id).catch(() => {});
+  }
   if (globalThis.NexoSync?.syncOrders) {
     globalThis.NexoSync.syncOrders().catch(() => {});
   }
@@ -877,10 +997,46 @@ function confirmClose() {
   renderAll();
   showToast('Cierre de caja registrado.');
   if (globalThis.NexoSync?.syncCashShift) {
-    globalThis.NexoSync.syncCashShift(state.cashShift).catch(() => {});
+    globalThis.NexoSync.syncCashShift(state.cashShift, closedShift).catch(() => {});
   }
   openCloseSuccessDialog(closedShift);
 }
+
+async function forceResetShift() {
+  if (!window.confirm('¿Seguro que deseas forzar el cierre del turno activo y reiniciar el saldo esperado de caja a $0?')) return;
+  const now = Date.now();
+  const prevShift = state.cashShift || {};
+  const closedShift = {
+    id: prevShift.id || uid('shift'),
+    date: prevShift.date || today(),
+    openedAt: prevShift.openedAt || now,
+    closedAt: now,
+    openingCash: Number(prevShift.openingCash || 0),
+    cashSales: cashSalesToday(),
+    otherSales: otherSalesToday(),
+    cashExpenses: cashExpensesToday() + cashPurchasesToday(),
+    totalSales: currentShiftPayments().reduce((sum, p) => sum + p.amount, 0),
+    expected: expectedCash(),
+    counted: 0,
+    difference: -expectedCash(),
+    closedBy: (typeof actor === 'function' ? actor() : (globalThis.actor ? globalThis.actor() : {})).userName || 'Administrador',
+    reason: 'Cierre forzado / Reinicio manual'
+  };
+
+  if (!Array.isArray(state.closedShifts)) state.closedShifts = [];
+  state.closedShifts.push(closedShift);
+  lastClosedShift = closedShift;
+  state.cashShift = { status: 'closed', lastClosedAt: now };
+  saveState();
+  if (globalThis.NexoSync?.syncCashShift) {
+    await globalThis.NexoSync.syncCashShift(state.cashShift, closedShift).catch(() => {});
+  }
+  const closeDlg = document.querySelector('#closeDialog');
+  if (closeDlg) closeDlg.close();
+  renderAll();
+  showToast('Turno cerrado forzosamente. Saldo de caja reiniciado a $0.');
+}
+globalThis.forceResetShift = forceResetShift;
 
 function openCloseSuccessDialog(closedShift) {
   const content = document.querySelector('#closeSuccessContent');
@@ -1126,6 +1282,7 @@ function fallbackCopyText(text) {
 function exportBackup() { const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`nexobar-pos-respaldo-${today()}.json`;a.click();URL.revokeObjectURL(url);showToast('Respaldo descargado.'); }
 function importBackup(file) { const reader=new FileReader();reader.onload=()=>{try{const incoming=JSON.parse(reader.result);if(!incoming.tables||!incoming.products||!incoming.inventory)throw new Error();state=normalizeState(incoming);saveState();renderAll();afterStateReplaced();showToast('Respaldo restaurado correctamente.');}catch{showToast('El archivo de respaldo no es válido.');}};reader.readAsText(file); }
 function escapeHtml(str){return String(str).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+globalThis.escapeHtml = escapeHtml;
 
 document.addEventListener('click', event => {
   const target = event.target.closest('button');
@@ -1159,7 +1316,38 @@ document.addEventListener('click', event => {
   if (target.id === 'splitClearBtn') clearSplitItems();
   if (target.id === 'chargeSelectedItemsBtn') chargeSelectedSplitItems();
   if (target.dataset.adjust) openInventoryDialog(target.dataset.adjust);
-  if (target.dataset.close) document.querySelector(`#${target.dataset.close}`).close();
+  if (target.dataset.close) {
+    const dlgId = target.dataset.close;
+    if (dlgId === 'orderDialog' && state.currentOrderId) {
+      const curOrder = getOrder(state.currentOrderId);
+      if (curOrder && (!curOrder.items || curOrder.items.length === 0 || !curOrder.items.some(i => (Number(i.qty) || 0) > 0))) {
+        state.orders = state.orders.filter(o => o.id !== curOrder.id);
+        state.currentOrderId = null;
+        saveState();
+        if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
+        renderAll();
+      }
+    }
+    document.querySelector(`#${dlgId}`)?.close();
+  }
+  if (target.dataset.payCustomOrder) {
+    const oId = target.dataset.payCustomOrder;
+    state.currentOrderId = oId;
+    openPayment();
+  }
+  if (target.dataset.deleteCustomOrder) {
+    const oId = target.dataset.deleteCustomOrder;
+    const ord = getOrder(oId);
+    if (ord && window.confirm(`¿Eliminar o anular la cuenta "${ord.tableName || 'Cuenta'}"?`)) {
+      state.orders = state.orders.filter(o => o.id !== oId);
+      saveState();
+      if (globalThis.NexoSync?.deleteActiveOrder) globalThis.NexoSync.deleteActiveOrder(oId).catch(() => {});
+      if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
+      renderAll();
+      showToast('Cuenta eliminada.');
+    }
+  }
+  if (target.id === 'forceResetShiftButton' || target.id === 'resetShiftConfigButton') forceResetShift();
   if (target.dataset.editProduct) openProductDialog(target.dataset.editProduct);
   if (target.dataset.deleteProduct) deleteProduct(target.dataset.deleteProduct);
   if (target.dataset.saveCategory !== undefined) saveCategory(Number(target.dataset.saveCategory));
@@ -1229,15 +1417,16 @@ async function bootstrap() {
   state = normalizeState(saved || defaultState);
   storageReady = true;
   scheduleSave();
+  cleanupOrphanOrders();
 
-  // Si la base local está vacía, tiene admin por defecto o requiere setup, consultar configuración en Supabase
-  const needsCloudConfig = isFreshLocal || !state.users.length || state.users.some(u => u.role === 'admin' && u.mustChangePin);
-  if (needsCloudConfig && typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase) {
+  // Si hay conexión, sincronizar con Supabase (descargar turno de caja y pedidos activos)
+  if (typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase) {
     try {
       const pullRes = await globalThis.NexoSync.pullAllFromSupabase();
       if (pullRes && pullRes.ok && pullRes.count > 0) {
         console.log(`[NexoSync] Base local hidratada con éxito desde Supabase: ${pullRes.count} registros.`);
       }
+      cleanupOrphanOrders();
     } catch (e) {
       console.warn('[NexoSync] No se pudo descargar datos iniciales de Supabase:', e);
     }
@@ -1291,5 +1480,10 @@ function renderReportPeriod() {
   document.querySelector('#dailyChart').innerHTML=days.map(([date,value])=>{const d=parseISO(date), label=days.length<=7?d.toLocaleDateString('es-CO',{weekday:'short'}).replace('.','')+' '+d.getDate():d.getDate();return `<div class="day-col" title="${shortDate(date)}: ${money.format(value)}"><span class="day-val">${days.length<=15&&value?compact.format(value):''}</span><div class="day-bar"><i style="height:${value?Math.max(3,value/max*100):0}%"></i></div><span class="day-label">${label}</span></div>`;}).join('');
   document.querySelector('#dailySummary').innerHTML=`<div class="report-row"><span>Ventas del período</span><b>${money.format(sum)}</b></div><div class="report-row"><span>Promedio diario</span><b>${money.format(sum/days.length)}</b></div><div class="report-row"><span>Mejor día</span><b>${sum?`${shortDate(best[0])} · ${money.format(best[1])}`:'—'}</b></div>`;
 }
+globalThis.renderReportPeriod = renderReportPeriod;
+globalThis.shortDate = shortDate;
+globalThis.reportBounds = reportBounds;
+globalThis.reportPayments = reportPayments;
+globalThis.parseISO = parseISO;
 document.addEventListener('click',e=>{const b=e.target.closest('[data-report-range]');if(!b)return;reportRange=b.dataset.reportRange;renderReports();});
 (function(){const input=document.querySelector('#reportDate');input.max=today();input.addEventListener('change',()=>{if(!input.value)return;reportDate=input.value;reportRange='date';renderReports();});})();

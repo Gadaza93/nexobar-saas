@@ -19,6 +19,9 @@ let editingUserId = null, forcedPinChange = false;
 function me() { return session ? state.users.find(u => u.id === session && u.active !== false) || null : null; }
 function can(perm) { const user = me(); if (!user) return false; const perms = ROLE_PERMS[user.role]; return perms === '*' || (Array.isArray(perms) && perms.includes(perm)); }
 function actor() { const user = me(); return { userId: user?.id || null, userName: user?.name || '' }; }
+globalThis.me = me;
+globalThis.can = can;
+globalThis.actor = actor;
 function deny() { showToast('Tu rol no tiene permiso para esta acción.'); }
 function guard(name, perm) { const original = globalThis[name]; if (typeof original !== 'function') return; globalThis[name] = function (...args) { if (!can(perm)) { deny(); return; } return original.apply(this, args); }; }
 function initials(name) { return String(name || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'; }
@@ -446,6 +449,15 @@ function renderStockLog() {
     `;
   }).join('') || '<tr><td colspan="8" class="muted">Aún no hay ajustes, mermas ni conteos registrados.</td></tr>';
 }
+
+globalThis.renderRecentInvoices = renderRecentInvoices;
+globalThis.renderInvoices = renderInvoices;
+globalThis.applyPermissions = applyPermissions;
+globalThis.renderUserChip = renderUserChip;
+globalThis.renderTeam = renderTeam;
+globalThis.renderSuppliers = renderSuppliers;
+globalThis.renderStockLog = renderStockLog;
+globalThis.renderReports = renderReports;
 function saveInventory() {
   if (!requireOpenShift()) return;
   const item = state.inventory.find(i => i.id === document.querySelector('#inventorySelect').value), delta = Number(document.querySelector('#inventoryAmount').value), reason = document.querySelector('#inventoryReason').value.trim();
@@ -560,7 +572,7 @@ function deleteCurrentOrder() {
   const order = getOrder(state.currentOrderId); if (!order) return;
   if (order.items.length && !window.confirm(`¿Eliminar el pedido de ${order.tableName} por ${money.format(orderTotal(order))}?`)) return;
   logAudit('Pedido eliminado', `${order.tableName} · ${money.format(orderTotal(order))} · ${order.items.length} productos`, { data: structuredClone(order) });
-  state.orders = state.orders.filter(o => o.id !== order.id); saveState(); if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {}); document.querySelector('#orderDialog').close(); state.currentOrderId = null; renderAll(); showToast('Pedido eliminado.');
+  state.orders = state.orders.filter(o => o.id !== order.id); saveState(); if (globalThis.NexoSync?.deleteActiveOrder) globalThis.NexoSync.deleteActiveOrder(order.id).catch(() => {}); if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {}); document.querySelector('#orderDialog').close(); state.currentOrderId = null; renderAll(); showToast('Pedido eliminado.');
 }
 
 /* ============ Reportes analíticos ============ */
@@ -619,7 +631,7 @@ function rowList(rows) { return rows.map(([label, value]) => `<div class="report
 function hourLabel(h) { return `${String(h).padStart(2, '0')}:00`; }
 
 function renderReports() {
-  renderReportPeriod();
+  if (typeof renderReportPeriod === 'function') renderReportPeriod(); else if (typeof globalThis.renderReportPeriod === 'function') globalThis.renderReportPeriod();
   const $ = s => document.querySelector(s), d = reportDataset(), { cur, old } = d, compact = new Intl.NumberFormat('es-CO', { notation: 'compact', maximumFractionDigits: 1 });
   $('#reportTotal').textContent = money.format(cur.total);
   $('#reportTicket').textContent = `${cur.count} ${cur.count === 1 ? 'ticket' : 'tickets'} · Promedio ${money.format(cur.avg)}`;

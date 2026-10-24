@@ -164,6 +164,11 @@ async function runTests() {
 
   const NexoSync = global.NexoSync;
 
+  // Limpieza inicial para aislamiento de pruebas
+  await sb.from("pedidos_activos").delete().eq("business_id", DEFAULT_BUSINESS_ID);
+  global.state.orders = [];
+  await NexoSync.syncOrders();
+
   // PRUEBA 1: Verificar syncOrders() y replicación en Supabase
   console.log("\n1. Probando creación de orden activa y sincronización hacia Supabase...");
   global.state.cashShift = { id: "shift_test_1", status: "open", openingCash: 100000, date: "2026-10-23" };

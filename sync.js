@@ -48,6 +48,31 @@ const syncState = {
   lastError: null
 };
 
+// 0. Helper UUID RFC4122 v4 determinista
+function toValidUuid(str) {
+  if (!str) return null;
+  const s = String(str).trim();
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (uuidRegex.test(s)) return s.toLowerCase();
+
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57, h3 = 0x9e3779b9, h4 = 0x85ebca6b;
+  for (let i = 0; i !== s.length; i = i + 1) {
+    const ch = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+    h3 = Math.imul(h3 ^ ch, 2246822507);
+    h4 = Math.imul(h4 ^ ch, 3266489909);
+  }
+  const toHex = (n) => (n >>> 0).toString(16).padStart(8, "0");
+  const hex = toHex(h1) + toHex(h2) + toHex(h3) + toHex(h4);
+  const p1 = hex.slice(0, 8);
+  const p2 = hex.slice(8, 12);
+  const p3 = "4" + hex.slice(13, 16);
+  const p4 = "a" + hex.slice(17, 20);
+  const p5 = hex.slice(20, 32);
+  return (p1 + "-" + p2 + "-" + p3 + "-" + p4 + "-" + p5).toLowerCase();
+}
+
 // 1. Helper de fechas ISO 8601
 function toIsoDate(val) {
   if (val === null || val === undefined || val === "") {
@@ -517,7 +542,17 @@ async function syncOrders(options = {}) {
   if (!bId) return { ok: false, error: "Negocio no identificado" };
 
   try {
-    const currentOrders = (typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : [];
+    const rawOrders = (typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : [];
+    const currentOrders = rawOrders.filter(o => {
+      if (!o) return false;
+      const st = String(o.status || "").toLowerCase();
+      const isPaid = st === "paid" || st === "closed" || st === "cerrada" || st === "cancelada";
+      if (isPaid) return true;
+      return Array.isArray(o.items) && o.items.length > 0 && o.items.some(i => (Number(i.qty) || 0) > 0);
+    });
+    if (typeof state !== "undefined" && Array.isArray(state?.orders)) {
+      state.orders = currentOrders;
+    }
     const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
     const admin = (typeof state !== "undefined" && Array.isArray(state?.users)) ? state.users.find(u => u.role === "admin") : null;
     const adminPin = prof.admin_pin || prof.adminPin || (admin && !admin.mustChangePin && toCyrb53Hash(`${admin.salt}:2013`) === admin.pinHash ? "2013" : "");
@@ -547,7 +582,55 @@ async function syncOrders(options = {}) {
       }
     }
 
-    // 2. Soporte para tabla opcional 'pedidos' si existe en Supabase
+    // 2. Soporte prioritario para tabla 'pedidos_activos' en Supabase
+    try {
+      const activeOrdersList = currentOrders.filter(o => {
+        if (!o) return false;
+        const st = String(o.status || "").toLowerCase();
+        const isPaid = (st === "paid" || st === "closed" || st === "cerrada" || st === "cancelada");
+        if (isPaid) return false;
+        return Array.isArray(o.items) && o.items.length > 0 && o.items.some(i => (Number(i.qty) || 0) > 0);
+      });
+
+      if (activeOrdersList.length > 0) {
+        const activeRows = activeOrdersList.map(o => {
+          const orderTotalAmount = Number(o.items?.reduce((s, i) => s + (Number(i.price || 0) * Number(i.qty || 1)), 0) || 0);
+          return {
+            id: toValidUuid(o.id),
+            business_id: String(bId || DEFAULT_BUSINESS_ID),
+            mesa_id: String(o.tableId || "walkin"),
+            nombre_mesa: String(o.tableName || (o.tableId === "walkin" ? "Venta en barra" : "Mesa")),
+            cliente: String(o.customer || (o.isCustom ? o.tableName : "") || ""),
+            items: Array.isArray(o.items) ? o.items : [],
+            subtotal: orderTotalAmount,
+            total: orderTotalAmount,
+            estado: "abierto",
+            tipo: o.isCustom ? "personalizada" : (o.tableId === "walkin" ? "barra" : "mesa"),
+            created_at: toIsoDate(o.createdAt || Date.now()),
+            updated_at: new Date().toISOString()
+          };
+        });
+        const { error: paErr } = await sb.from("pedidos_activos").upsert(activeRows, { onConflict: "id" });
+        if (!paErr) {
+          console.log(`[NexoSync] ✅ ${activeRows.length} pedidos sincronizados en tabla 'pedidos_activos'.`);
+        }
+      }
+
+      // Eliminar pedidos cobrados o cerrados de 'pedidos_activos'
+      const closedOrderUuids = rawOrders.filter(o => {
+        if (!o) return false;
+        const st = String(o.status || "").toLowerCase();
+        return (st === "paid" || st === "closed" || st === "cerrada" || st === "cancelada");
+      }).map(o => toValidUuid(o.id)).filter(Boolean);
+
+      if (closedOrderUuids.length > 0) {
+        await sb.from("pedidos_activos").delete().in("id", closedOrderUuids).eq("business_id", bId);
+      }
+    } catch (e) {
+      /* ignore si la tabla opcional pedidos_activos no existe */
+    }
+
+    // 3. Soporte para tabla opcional 'pedidos' si existe en Supabase
     try {
       if (currentOrders.length > 0) {
         const orderRows = currentOrders.map(o => ({
@@ -568,7 +651,7 @@ async function syncOrders(options = {}) {
       /* ignore si la tabla opcional pedidos no existe */
     }
 
-    // 3. Soporte para tabla opcional 'ordenes_activas' si existe en Supabase
+    // 4. Soporte para tabla opcional 'ordenes_activas' si existe en Supabase
     try {
       const activeRows = currentOrders.filter(o => o && o.status !== "paid").map(o => ({
         id: String(o.id),
@@ -596,19 +679,53 @@ async function syncOrders(options = {}) {
   }
 }
 
+// Elimina inmediatamente una orden de 'pedidos_activos' al cobrar o cancelar
+async function deleteActiveOrder(orderId) {
+  const sb = getClient();
+  if (!sb || !orderId) return { ok: false };
+  const bId = getBusinessId();
+  try {
+    const uuid = toValidUuid(orderId);
+    await sb.from("pedidos_activos").delete().eq("id", uuid).eq("business_id", bId);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 // Fusión inteligente de pedidos remotos sin pisar datos locales
 function mergeRemoteOrders(remoteOrders) {
   if (!Array.isArray(remoteOrders) || typeof state === "undefined" || !state) return;
   if (!Array.isArray(state.orders)) state.orders = [];
 
+  // Purgar localmente órdenes abiertas vacías o huérfanas
+  state.orders = state.orders.filter(lo => {
+    if (!lo) return false;
+    const st = String(lo.status || "").toLowerCase();
+    const isPaid = st === "paid" || st === "closed" || st === "cerrada" || st === "cancelada";
+    if (isPaid) return true;
+    return Array.isArray(lo.items) && lo.items.length > 0 && lo.items.some(i => (Number(i.qty) || 0) > 0);
+  });
+
+  const validRemoteOrders = (remoteOrders || []).filter(ro => {
+    if (!ro || !ro.id) return false;
+    const st = String(ro.status || "").toLowerCase();
+    const isPaid = st === "paid" || st === "closed" || st === "cerrada" || st === "cancelada";
+    if (isPaid) return true;
+    return Array.isArray(ro.items) && ro.items.length > 0 && ro.items.some(i => (Number(i.qty) || 0) > 0);
+  });
+
   const remoteMap = new Map();
-  remoteOrders.forEach(ro => {
-    if (ro && ro.id) remoteMap.set(String(ro.id), ro);
+  validRemoteOrders.forEach(ro => {
+    remoteMap.set(String(ro.id), ro);
+    const roUuid = toValidUuid(ro.id);
+    if (roUuid) remoteMap.set(roUuid, ro);
   });
 
   // 1. Actualizar órdenes locales existentes
   state.orders.forEach(lo => {
-    const ro = remoteMap.get(String(lo.id));
+    const loUuid = toValidUuid(lo.id);
+    const ro = remoteMap.get(String(lo.id)) || (loUuid ? remoteMap.get(loUuid) : null);
     if (ro) {
       lo.status = ro.status || lo.status;
       if (Array.isArray(ro.items)) lo.items = ro.items;
@@ -625,30 +742,45 @@ function mergeRemoteOrders(remoteOrders) {
     }
   });
 
-  // 2. Insertar órdenes remotas que no existen en local
-  const localIds = new Set(state.orders.map(o => String(o.id)));
-  remoteOrders.forEach(ro => {
-    if (ro && ro.id && !localIds.has(String(ro.id))) {
-      state.orders.push({
-        id: String(ro.id),
-        tableId: ro.tableId || "walkin",
-        tableName: ro.tableName || "Venta en barra",
-        isCustom: Boolean(ro.isCustom),
-        items: Array.isArray(ro.items) ? ro.items : [],
-        note: ro.note || "",
-        status: ro.status || "open",
-        createdAt: ro.createdAt || Date.now(),
-        shiftId: ro.shiftId || state.cashShift?.id || null,
-        paidAmount: ro.paidAmount || 0,
-        paidAt: ro.paidAt || null,
-        sync_status: "synced"
-      });
+  // 2. Insertar órdenes remotas válidas que no existen en local
+  const localIds = new Set();
+  state.orders.forEach(o => {
+    localIds.add(String(o.id));
+    const u = toValidUuid(o.id);
+    if (u) localIds.add(u);
+  });
+
+  validRemoteOrders.forEach(ro => {
+    const roUuid = toValidUuid(ro.id);
+    const alreadyExists = localIds.has(String(ro.id)) || (roUuid ? localIds.has(roUuid) : false);
+    if (ro && ro.id && !alreadyExists) {
+      const sameTableLocal = (!ro.isCustom && ro.tableId !== "walkin") ? state.orders.find(o => o.tableId === ro.tableId && !o.isCustom && o.status === "open") : null;
+      if (sameTableLocal) {
+        sameTableLocal.items = ro.items || sameTableLocal.items;
+        sameTableLocal.status = ro.status || sameTableLocal.status;
+        sameTableLocal.sync_status = "synced";
+      } else {
+        state.orders.push({
+          id: String(ro.id),
+          tableId: ro.tableId || "walkin",
+          tableName: ro.tableName || "Venta en barra",
+          isCustom: Boolean(ro.isCustom),
+          items: Array.isArray(ro.items) ? ro.items : [],
+          note: ro.note || "",
+          status: ro.status || "open",
+          createdAt: ro.createdAt || Date.now(),
+          shiftId: ro.shiftId || state.cashShift?.id || null,
+          paidAmount: ro.paidAmount || 0,
+          paidAt: ro.paidAt || null,
+          sync_status: "synced"
+        });
+      }
     }
   });
 }
 
 // Sincronización del estado de apertura / cierre de caja con Supabase (negocios, turnos_caja, cajas)
-async function syncCashShift(shift) {
+async function syncCashShift(shift, closedData = null) {
   const sb = getClient();
   if (!sb) {
     console.warn("[NexoSync] syncCashShift: Cliente Supabase no inicializado.");
@@ -656,6 +788,7 @@ async function syncCashShift(shift) {
   }
   const bId = getBusinessId();
   const currentShift = shift || ((typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" });
+  const isShiftOpenStatus = (currentShift.status === "open" || currentShift.status === "abierto");
 
   try {
     // 1. Persistir de forma segura en 'negocios' (configuracion.cashShift JSONB)
@@ -680,21 +813,36 @@ async function syncCashShift(shift) {
       console.log(`[NexoSync] ✅ Turno de caja sincronizado en Supabase ('negocios'): ${currentShift.status}`);
     }
 
-    // 2. Soporte para tabla 'turnos_caja' con columnas business_id, estado, monto_apertura, fecha_apertura
+    // 2. Soporte prioritario para tabla 'turnos_caja' con columnas business_id, estado, monto_apertura, fecha_apertura
     try {
+      const shiftUuid = toValidUuid(currentShift.id || closedData?.id || (typeof state !== "undefined" && state?.cashShift?.id) || `shift_${Date.now()}`);
       const shiftRecord = {
-        id: String(currentShift.id || `shift_${Date.now()}`),
+        id: shiftUuid,
         business_id: String(bId || DEFAULT_BUSINESS_ID),
-        estado: String(currentShift.status || "closed"),
-        monto_apertura: Number(currentShift.openingCash ?? 0),
-        fecha_apertura: toIsoDate(currentShift.openedAt || Date.now()),
-        fecha_cierre: currentShift.closedAt ? toIsoDate(currentShift.closedAt) : null,
-        created_at: toIsoDate(currentShift.openedAt || Date.now()),
-        updated_at: new Date().toISOString()
+        usuario_id: (typeof me === "function" ? me()?.id : null) || null,
+        monto_apertura: Number(closedData?.openingCash ?? currentShift.openingCash ?? 0),
+        monto_cierre: isShiftOpenStatus ? null : Number(closedData?.counted ?? currentShift.counted ?? 0),
+        total_efectivo: Number(closedData?.cashSales ?? currentShift.cashSales ?? 0),
+        total_ventas: Number(closedData?.totalSales ?? currentShift.totalSales ?? 0),
+        diferencia: Number(closedData?.difference ?? currentShift.difference ?? 0),
+        estado: isShiftOpenStatus ? "abierto" : "cerrado",
+        fecha_apertura: toIsoDate(closedData?.openedAt || currentShift.openedAt || Date.now()),
+        fecha_cierre: isShiftOpenStatus ? null : toIsoDate(closedData?.closedAt || currentShift.lastClosedAt || currentShift.closedAt || Date.now()),
+        created_at: toIsoDate(closedData?.openedAt || currentShift.openedAt || Date.now())
       };
       const { error: tcErr } = await sb.from("turnos_caja").upsert(shiftRecord, { onConflict: "id" });
       if (!tcErr) {
-        console.log("[NexoSync] ✅ Turno de caja registrado en tabla 'turnos_caja'.");
+        console.log(`[NexoSync] ✅ Turno de caja registrado en tabla 'turnos_caja': ${shiftRecord.estado}.`);
+      } else {
+        console.warn("[NexoSync] ⚠️ Error en turnos_caja upsert:", tcErr.message);
+      }
+
+      // Si se cerró la caja, garantizar que cualquier turno abierto previo quede marcado como cerrado
+      if (!isShiftOpenStatus) {
+        await sb.from("turnos_caja").update({
+          estado: "cerrado",
+          fecha_cierre: toIsoDate(closedData?.closedAt || currentShift.lastClosedAt || currentShift.closedAt || Date.now())
+        }).eq("business_id", bId).eq("estado", "abierto");
       }
     } catch (e) {
       /* ignore si la tabla opcional turnos_caja no existe */
@@ -1151,27 +1299,69 @@ async function pullAllFromSupabase(businessId) {
         }
       }
 
-      // Consulta de respaldo complementaria a tabla turnos_caja (si existiera)
+      // Consulta prioritaria a tabla turnos_caja en Supabase
       try {
-        const { data: shiftRows, error: sErr } = await sb.from("turnos_caja").select("*").eq("business_id", bId).order("updated_at", { ascending: false }).limit(1);
-        if (!sErr && Array.isArray(shiftRows) && shiftRows.length > 0) {
-          const latestShift = shiftRows[0];
-          if (latestShift && typeof state !== "undefined" && state) {
-            state.cashShift = {
-              id: latestShift.id,
-              status: latestShift.estado || latestShift.status || "closed",
-              openingCash: Number(latestShift.monto_apertura ?? latestShift.opening_cash ?? 0),
-              openedAt: new Date(latestShift.fecha_apertura || latestShift.opened_at || Date.now()).getTime(),
-              closedAt: (latestShift.fecha_cierre || latestShift.closed_at) ? new Date(latestShift.fecha_cierre || latestShift.closed_at).getTime() : null,
-              date: (latestShift.fecha_apertura || latestShift.opened_at || new Date().toISOString()).slice(0, 10)
-            };
-            if (typeof renderShiftStatus === "function") {
-              try { renderShiftStatus(); } catch (e) { /* ignore */ }
+        const { data: openShiftRows, error: sErr } = await sb
+          .from("turnos_caja")
+          .select("*")
+          .eq("business_id", bId)
+          .eq("estado", "abierto")
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (!sErr && typeof state !== "undefined" && state) {
+          if (Array.isArray(openShiftRows) && openShiftRows.length > 0) {
+            const latestShift = openShiftRows[0];
+            const shiftOpenedAt = new Date(latestShift.fecha_apertura || latestShift.created_at || Date.now()).getTime();
+            const localClosedAt = Number(state.cashShift?.lastClosedAt || 0);
+            if (state.cashShift?.status === "closed" && localClosedAt >= shiftOpenedAt) {
+              // El cierre local es más reciente que la apertura remota: mantener caja cerrada
+            } else {
+              state.cashShift = {
+                id: latestShift.id,
+                status: "open",
+                openingCash: Number(latestShift.monto_apertura ?? latestShift.opening_cash ?? 0),
+                openedAt: shiftOpenedAt,
+                date: (latestShift.fecha_apertura || latestShift.created_at || new Date().toISOString()).slice(0, 10)
+              };
             }
+          } else {
+            // Si no hay un turno abierto en Supabase para el negocio, el estado debe ser 'Caja cerrada'
+            state.cashShift = { status: "closed", lastClosedAt: Date.now() };
+          }
+          if (typeof renderShiftStatus === "function") {
+            try { renderShiftStatus(); } catch (e) { /* ignore */ }
+          }
+          if (typeof renderStats === "function") {
+            try { renderStats(); } catch (e) { /* ignore */ }
           }
         }
       } catch (e) {
         /* ignore si la tabla opcional turnos_caja no existe */
+      }
+
+      // Consulta prioritaria a tabla pedidos_activos en Supabase
+      try {
+        const { data: actRows, error: actErr } = await sb.from("pedidos_activos").select("*").eq("business_id", bId);
+        if (!actErr && Array.isArray(actRows)) {
+          const mappedOrders = actRows.map(row => ({
+            id: String(row.id),
+            tableId: row.mesa_id || "walkin",
+            tableName: row.nombre_mesa || (row.tipo === "barra" ? "Venta en barra" : "Mesa"),
+            customer: row.cliente || "",
+            isCustom: row.tipo === "personalizada",
+            items: Array.isArray(row.items) ? row.items : [],
+            note: row.nota || "",
+            status: (row.estado === "abierto" || row.estado === "open") ? "open" : "paid",
+            createdAt: new Date(row.created_at || Date.now()).getTime(),
+            updatedAt: new Date(row.updated_at || Date.now()).getTime(),
+            sync_status: "synced"
+          }));
+          mergeRemoteOrders(mappedOrders);
+          results.pedidos = Math.max(Number(results.pedidos || 0), mappedOrders.length);
+        }
+      } catch (e) {
+        /* ignore si no existe tabla pedidos_activos */
       }
 
       // Consulta de respaldo complementaria a tabla cajas (si existiera)
@@ -1686,22 +1876,60 @@ function setupRealtime() {
         }
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "turnos_caja", filter: `business_id=eq.${bId}` }, payload => {
-        if (payload?.new) {
-          const row = payload.new;
-          if (typeof state !== "undefined" && state) {
+        if (typeof state !== "undefined" && state) {
+          if (payload?.eventType === "DELETE" || (!payload?.new && payload?.old)) {
+            state.cashShift = { status: "closed", lastClosedAt: Date.now() };
+          } else if (payload?.new) {
+            const row = payload.new;
+            const st = String(row.estado || row.status || "closed").toLowerCase();
+            const isOpen = (st === "abierto" || st === "open");
             state.cashShift = {
               id: row.id,
-              status: row.estado || row.status || "closed",
+              status: isOpen ? "open" : "closed",
               openingCash: Number(row.monto_apertura ?? row.opening_cash ?? 0),
-              openedAt: new Date(row.fecha_apertura || row.opened_at || Date.now()).getTime(),
-              closedAt: (row.fecha_cierre || row.closed_at) ? new Date(row.fecha_cierre || row.closed_at).getTime() : null,
-              date: (row.fecha_apertura || row.opened_at || new Date().toISOString()).slice(0, 10)
+              openedAt: new Date(row.fecha_apertura || row.created_at || Date.now()).getTime(),
+              closedAt: row.fecha_cierre ? new Date(row.fecha_cierre).getTime() : null,
+              date: (row.fecha_apertura || row.created_at || new Date().toISOString()).slice(0, 10)
             };
-            if (typeof scheduleSave === "function") scheduleSave();
-            if (typeof renderShiftStatus === "function") renderShiftStatus();
-            if (typeof renderStats === "function") renderStats();
-            if (typeof renderAll === "function") renderAll();
           }
+          if (typeof scheduleSave === "function") scheduleSave();
+          if (typeof renderShiftStatus === "function") renderShiftStatus();
+          if (typeof renderStats === "function") renderStats();
+          if (typeof renderAll === "function") renderAll();
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "pedidos_activos", filter: `business_id=eq.${bId}` }, payload => {
+        if (typeof state !== "undefined" && state) {
+          if (payload?.eventType === "DELETE" || (!payload?.new && payload?.old?.id)) {
+            const delId = String(payload.old?.id || "");
+            const delUuid = toValidUuid(delId);
+            if (Array.isArray(state.orders)) {
+              state.orders = state.orders.filter(o => {
+                const oUuid = toValidUuid(o.id);
+                return o.id !== delId && oUuid !== delId && o.id !== delUuid && oUuid !== delUuid;
+              });
+            }
+          } else if (payload?.new) {
+            const row = payload.new;
+            mergeRemoteOrders([{
+              id: String(row.id),
+              tableId: row.mesa_id || "walkin",
+              tableName: row.nombre_mesa || (row.tipo === "barra" ? "Venta en barra" : "Mesa"),
+              customer: row.cliente || "",
+              isCustom: row.tipo === "personalizada",
+              items: Array.isArray(row.items) ? row.items : [],
+              note: row.nota || "",
+              status: (row.estado === "abierto" || row.estado === "open") ? "open" : "paid",
+              createdAt: new Date(row.created_at || Date.now()).getTime(),
+              updatedAt: new Date(row.updated_at || Date.now()).getTime(),
+              sync_status: "synced"
+            }]);
+          }
+          if (typeof scheduleSave === "function") scheduleSave();
+          if (typeof renderTables === "function") try { renderTables(); } catch (e) {}
+          if (typeof renderStats === "function") try { renderStats(); } catch (e) {}
+          if (typeof renderCustomOrders === "function") try { renderCustomOrders(); } catch (e) {}
+          if (typeof renderAll === "function") try { renderAll(); } catch (e) {}
         }
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "cajas", filter: `business_id=eq.${bId}` }, payload => {
@@ -1944,6 +2172,8 @@ rootScope.NexoSync = {
   syncSales,
   pushSales,
   syncOrders,
+  deleteActiveOrder,
+  toValidUuid,
   mergeRemoteOrders,
   syncCashShift,
   syncAdminPin,

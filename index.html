@@ -131,6 +131,13 @@
             </div>
             <p id="cloudSyncStatus" class="muted" style="margin-top:0.4rem;font-size:0.85rem;"></p>
           </article>
+          <article class="data-card backup-card" id="shiftResetCard">
+            <h3>Turno y Estado de Caja</h3>
+            <p class="muted">Si la caja presenta un saldo desfasado por turnos anteriores no cerrados o inconsistentes, puedes reiniciar el turno y restablecer el saldo esperado a $0 tanto localmente como en la nube.</p>
+            <div class="backup-actions">
+              <button id="resetShiftConfigButton" class="remove-line" style="padding:10px 16px;font-size:13px;border-radius:8px;" type="button">⚠️ Forzar cierre de turno y reiniciar saldo a $0</button>
+            </div>
+          </article>
           <article class="data-card backup-card" data-perm="backup">
             <h3>Respaldos de la base de datos</h3>
             <p class="muted">Se guarda una copia completa de todo (ventas, inventario, usuarios, bitácora). Para restaurarla usa «Importar respaldo».</p>
@@ -316,6 +323,7 @@
       <label class="field-label" for="countedCash">Total efectivo contado</label><input id="countedCash" class="amount-input" type="number" min="0" inputmode="numeric" readonly />
       <p id="cashDifference" class="change-message"></p>
       <button id="confirmCloseButton" class="primary-button full">Registrar cierre</button>
+      <button id="forceResetShiftButton" type="button" class="outline-button full" style="margin-top:8px;border-color:var(--danger,#e53e3e);color:var(--danger,#e53e3e);font-size:13px;font-weight:600;">Forzar cierre de turno y reiniciar saldo a $0</button>
     </dialog>
 
     <dialog id="openShiftDialog" class="small-dialog">
