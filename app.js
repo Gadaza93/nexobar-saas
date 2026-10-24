@@ -306,8 +306,156 @@ function renderInventory() {
 function renderPurchases() { const purchases = state.purchases.filter(p => p.date === today()); const expenses = state.expenses.filter(e => e.date === today()); document.querySelector('#purchasesTotal').textContent = money.format(purchases.reduce((sum,p)=>sum+p.total,0)); document.querySelector('#purchaseInvoiceCount').textContent = purchases.length; document.querySelector('#expensesTotal').textContent = money.format(expenses.reduce((sum,e)=>sum+e.amount,0)); document.querySelector('#purchasesList').innerHTML = state.purchases.slice(-6).reverse().map(p => `<div class="activity-item"><div><strong>${escapeHtml(p.supplier)}</strong><span>Factura ${escapeHtml(p.invoice)} · ${p.lines.length} ${p.lines.length === 1 ? 'producto' : 'productos'}</span></div><div><b>${money.format(p.total)}</b><small>${formatDate(p.date)}</small></div></div>`).join('') || '<p class="muted">Aún no has ingresado facturas de compra.</p>'; document.querySelector('#expensesList').innerHTML = state.expenses.slice(-6).reverse().map(e => `<div class="activity-item"><div><strong>${escapeHtml(e.category)}</strong><span>${escapeHtml(e.description)} · ${escapeHtml(e.method)}</span></div><div><b>${money.format(e.amount)}</b><small>${formatDate(e.date)}</small></div></div>`).join('') || '<p class="muted">Aún no hay pagos de servicios u otros gastos.</p>'; }
 function renderHistory() { const movements=[...state.payments.map((payment,index)=>({time:paymentTimestamp(payment),type:'Factura',title:`${invoiceReference(payment,index)} · ${payment.customer || 'Venta mostrador'}`,detail:`${payment.method} · ${money.format(payment.amount)}`,amount:payment.amount,items:invoiceItemsMarkup(payment)})),...state.purchases.map(purchase=>({time:purchase.createdAt || new Date(`${purchase.date}T12:00:00`).getTime(),type:'Compra',title:`Factura de compra ${purchase.invoice}`,detail:`${purchase.supplier} · ${purchase.method || 'Sin medio de pago'} · ${purchase.lines.length} productos`,amount:purchase.total,items:`<div class="invoice-items">${purchase.lines.map(line=>`<div class="invoice-item"><span>${line.qty} × ${escapeHtml(line.productName || line.supplyName || 'Producto')}</span><b>${money.format(line.total)}</b></div>`).join('')}</div>`})),...state.expenses.map(expense=>({time:expense.createdAt || new Date(`${expense.date}T12:00:00`).getTime(),type:'Gasto',title:expense.category,detail:`${expense.description} · ${expense.method}`,amount:expense.amount})),...state.closedShifts.map(shift=>({time:shift.closedAt,type:'Cierre',title:'Cierre de turno',detail:`Ventas ${money.format(shift.totalSales || 0)} · Efectivo esperado ${money.format(shift.expected || 0)}`,amount:shift.counted}))].sort((a,b)=>b.time-a.time);const totalMovements=movements.length;movements.splice(20);document.querySelector('#historyList').innerHTML=movements.length?movements.map(movement=>`<article class="history-card"><span class="history-tag">${movement.type}</span><div class="history-head"><div><strong>${escapeHtml(movement.title)}</strong><span>${new Date(movement.time).toLocaleString('es-CO')} · ${escapeHtml(movement.detail)}</span></div><b>${money.format(movement.amount || 0)}</b></div>${movement.items || ''}</article>`).join('')+(totalMovements>20?`<p class="muted history-more">Mostrando los últimos 20 de ${totalMovements} movimientos.</p>`:''):'<p class="muted">El historial se llenará con facturas, compras, gastos y cierres.</p>'; }
 
-function openOrder(tableId = null) { if(!requireOpenShift())return;let table; if (tableId) table = state.tables.find(t => t.id === tableId); else table = { id: 'walkin', name: 'Venta en barra', zone: 'Barra' }; let order = activeOrderForTable(table.id); if (!order) { order = { id: uid('ord'), tableId:table.id, tableName:table.name, items:[], note:'', status:'open', createdAt:Date.now(),shiftId:state.cashShift.id,sync_status:'pending',...actor() }; state.orders.push(order); saveState(); if(globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(()=>{}); } state.currentOrderId = order.id; document.querySelector('#orderZone').textContent = table.zone.toUpperCase(); document.querySelector('#orderTitle').textContent = table.name; document.querySelector('#orderNote').value = order.note || ''; document.querySelector('#orderDialog').showModal(); renderOrderDialog(); }
-function openCustomOrder(orderId) { if(!requireOpenShift())return;const order=getOrder(orderId);if(!order)return;state.currentOrderId=order.id;document.querySelector('#orderZone').textContent='CUENTA ABIERTA';document.querySelector('#orderTitle').textContent=order.tableName;document.querySelector('#orderNote').value=order.note || '';document.querySelector('#orderDialog').showModal();renderOrderDialog(); }
+// Obtiene la lista unificada y limpia de productos para el POS (state.products + state.inventory)
+function getPOSProducts() {
+  if (typeof state === 'undefined' || !state) return [];
+  if (!Array.isArray(state.products)) state.products = [];
+  if (!Array.isArray(state.inventory)) state.inventory = [];
+
+  const invMap = new Map();
+  state.inventory.forEach(inv => {
+    if (inv && inv.id) invMap.set(String(inv.id), inv);
+  });
+
+  const knownInvIds = new Set();
+  const knownProductIds = new Set();
+
+  state.products.forEach(p => {
+    if (!p) return;
+    const pId = String(p.id);
+    knownProductIds.add(pId);
+    const invId = p.inventoryId || `stock-${p.id}`;
+    knownInvIds.add(String(invId));
+    knownInvIds.add(pId);
+
+    const inv = invMap.get(String(invId)) || invMap.get(pId) || null;
+    const invStock = inv ? Number(inv.qty) : (p.stock != null ? Number(p.stock) : 0);
+    p.stock = Number.isFinite(invStock) ? invStock : 0;
+    if (!p.category || !String(p.category).trim()) {
+      p.category = inv?.category || 'General';
+    }
+  });
+
+  // Si existen insumos en inventario sin producto correspondiente, incorporarlos como productos vendibles
+  state.inventory.forEach(inv => {
+    if (!inv || !inv.name) return;
+    const invIdStr = String(inv.id);
+    const cleanId = invIdStr.startsWith('stock-') ? invIdStr.replace(/^stock-/, '') : invIdStr;
+    if (!knownInvIds.has(invIdStr) && !knownProductIds.has(cleanId) && !knownProductIds.has(invIdStr)) {
+      const newProd = {
+        id: cleanId.startsWith('prod_') || cleanId.startsWith('p') ? cleanId : `prod_${cleanId}`,
+        name: inv.name,
+        category: inv.category || 'General',
+        price: Number(inv.price ?? inv.cost ?? 0),
+        cost: Number(inv.cost ?? 0),
+        stock: Number(inv.qty ?? 0),
+        inventoryId: inv.id,
+        recipe: { [inv.id]: 1 },
+        icon: '🍾',
+        image: null,
+        active: true,
+        sync_status: 'pending'
+      };
+      state.products.push(newProd);
+      knownProductIds.add(String(newProd.id));
+      knownInvIds.add(invIdStr);
+    }
+  });
+
+  // Filtrar productos válidos (NO exigir 'activo: true' ni 'disponible_pos: true')
+  return state.products.filter(p => {
+    if (!p || !p.id) return false;
+    // Solo excluir si explícitamente se configuró como inactivo
+    if (p.active === false || p.activo === false || p.disponible_pos === false || p.disponible === false) {
+      return false;
+    }
+    return true;
+  });
+}
+globalThis.getPOSProducts = getPOSProducts;
+
+function checkShiftIsOpen() {
+  if (typeof requireOpenShift === 'function') return requireOpenShift();
+  if (typeof globalThis.requireOpenShift === 'function') return globalThis.requireOpenShift();
+  return typeof isShiftOpen === 'function' ? isShiftOpen() : true;
+}
+
+function openOrder(tableId = null) {
+  if (!checkShiftIsOpen()) return;
+  let table;
+  if (tableId) table = state.tables.find(t => t.id === tableId);
+  else table = { id: 'walkin', name: 'Venta en barra', zone: 'Barra' };
+  if (!table) table = { id: tableId || 'walkin', name: 'Mesa', zone: 'Salón' };
+
+  let order = activeOrderForTable(table.id);
+  if (!order) {
+    order = {
+      id: uid('ord'),
+      tableId: table.id,
+      tableName: table.name,
+      items: [],
+      note: '',
+      status: 'open',
+      createdAt: Date.now(),
+      shiftId: state.cashShift?.id || null,
+      sync_status: 'pending',
+      ...actor()
+    };
+    state.orders.push(order);
+    saveState();
+  }
+  state.currentOrderId = order.id;
+
+  // Garantizar pestaña 'Todos' y buscador limpio por defecto al abrir
+  state.activeCategory = 'Todos';
+  state.search = '';
+  const searchInput = document.querySelector('#productSearch');
+  if (searchInput) searchInput.value = '';
+
+  const zoneEl = document.querySelector('#orderZone');
+  if (zoneEl) zoneEl.textContent = (table.zone || 'BARRA').toUpperCase();
+  const titleEl = document.querySelector('#orderTitle');
+  if (titleEl) titleEl.textContent = table.name || 'Pedido';
+  const noteEl = document.querySelector('#orderNote');
+  if (noteEl) noteEl.value = order.note || '';
+
+  const orderDlg = document.querySelector('#orderDialog');
+  if (orderDlg) {
+    if (typeof orderDlg.showModal === 'function') orderDlg.showModal();
+    else orderDlg.setAttribute('open', '');
+  }
+  renderOrderDialog();
+}
+globalThis.openOrder = openOrder;
+
+function openCustomOrder(orderId) {
+  if (!checkShiftIsOpen()) return;
+  const order = getOrder(orderId);
+  if (!order) return;
+  state.currentOrderId = order.id;
+
+  // Garantizar pestaña 'Todos' y buscador limpio por defecto al abrir
+  state.activeCategory = 'Todos';
+  state.search = '';
+  const searchInput = document.querySelector('#productSearch');
+  if (searchInput) searchInput.value = '';
+
+  const zoneEl = document.querySelector('#orderZone');
+  if (zoneEl) zoneEl.textContent = 'CUENTA ABIERTA';
+  const titleEl = document.querySelector('#orderTitle');
+  if (titleEl) titleEl.textContent = order.tableName || 'Cuenta personalizada';
+  const noteEl = document.querySelector('#orderNote');
+  if (noteEl) noteEl.value = order.note || '';
+
+  const orderDlg = document.querySelector('#orderDialog');
+  if (orderDlg) {
+    if (typeof orderDlg.showModal === 'function') orderDlg.showModal();
+    else orderDlg.setAttribute('open', '');
+  }
+  renderOrderDialog();
+}
+globalThis.openCustomOrder = openCustomOrder;
+
 function openCustomOrderDialog() { if(!requireOpenShift())return;document.querySelector('#customOrderName').value='';document.querySelector('#customOrderDialog').showModal(); }
 function createCustomOrder() { const name=document.querySelector('#customOrderName').value.trim();if(!name)return showToast('Escribe un nombre para la cuenta.');const order={id:uid('ord'),tableId:uid('custom'),tableName:name,isCustom:true,items:[],note:'',status:'open',createdAt:Date.now(),shiftId:state.cashShift.id,sync_status:'pending',...actor()};state.orders.push(order);saveState();if(globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(()=>{});document.querySelector('#customOrderDialog').close();renderAll();openCustomOrder(order.id); }
 function openTablesDialog() { renderTableManagement();document.querySelector('#newTableName').value='';document.querySelector('#newTableZone').value='Salón';document.querySelector('#tablesDialog').showModal(); }
@@ -315,9 +463,176 @@ function renderTableManagement() { const zones=['Barra','Salón','Terraza','VIP'
 function saveTable(tableId) { const table=state.tables.find(item=>item.id===tableId),name=document.querySelector(`[data-table-name="${tableId}"]`)?.value.trim(),zone=document.querySelector(`[data-table-zone="${tableId}"]`)?.value;if(!table||!name)return showToast('La mesa necesita un nombre.');if(state.tables.some(item=>item.id!==tableId&&item.name.toLowerCase()===name.toLowerCase()))return showToast('Ya existe una mesa con ese nombre.');table.name=name;table.zone=zone;state.orders.forEach(order=>{if(order.tableId===tableId)order.tableName=name;});saveState();renderTableManagement();renderAll();showToast('Mesa actualizada.'); }
 function addTable() { const name=document.querySelector('#newTableName').value.trim(),zone=document.querySelector('#newTableZone').value;if(!name)return showToast('Escribe el nombre de la mesa.');if(state.tables.some(table=>table.name.toLowerCase()===name.toLowerCase()))return showToast('Ya existe una mesa con ese nombre.');state.tables.push({id:uid('table'),name,zone});saveState();renderTableManagement();renderAll();showToast('Mesa creada.'); }
 function deleteTable(tableId) { const table=state.tables.find(item=>item.id===tableId);if(!table)return;if(activeOrderForTable(tableId))return showToast('Cobra o elimina el pedido activo antes de eliminar esta mesa.');if(!window.confirm(`¿Eliminar ${table.name}?`))return;state.tables=state.tables.filter(item=>item.id!==tableId);saveState();renderTableManagement();renderAll();showToast('Mesa eliminada.'); }
-function productVisual(product) { return product.image ? `<img src="${product.image}" alt="${escapeHtml(product.name)}" />` : escapeHtml(product.icon || '🍾'); }
-function renderOrderDialog() { const order = getOrder(state.currentOrderId); if (!order) return; const categories = ['Todos',...new Set(state.products.map(p=>p.category))]; document.querySelector('#categoryTabs').innerHTML = categories.map(cat => `<button class="category-button ${state.activeCategory===cat?'active':''}" data-category="${cat}">${escapeHtml(cat)}</button>`).join(''); const search = state.search.toLowerCase(); const products = state.products.filter(p => (state.activeCategory === 'Todos' || p.category === state.activeCategory) && p.name.toLowerCase().includes(search)); const emptyMsg = state.products.length === 0 ? '<p class="muted" style="text-align:center;padding:24px 12px;grid-column:1/-1;">No hay productos registrados. Crea uno nuevo o importa tu archivo Excel.</p>' : '<p class="muted">No encontramos ese producto.</p>'; document.querySelector('#productGrid').innerHTML = products.map(p=>`<button class="product" data-product="${p.id}"><span class="product-icon">${productVisual(p)}</span><strong>${escapeHtml(p.name)}</strong><span>${money.format(p.price)}</span></button>`).join('') || emptyMsg; document.querySelector('#ticketItems').innerHTML = order.items.length ? order.items.map(item => `<div class="ticket-item"><strong>${escapeHtml(item.name)}</strong><span class="item-price">${money.format(item.price*item.qty)}</span><div class="quantity-control"><button data-item-change="${item.productId}" data-delta="-1">−</button><span>${item.qty}</span><button data-item-change="${item.productId}" data-delta="1">+</button></div></div>`).join('') : '<p class="empty-ticket">Agrega productos para iniciar el pedido.</p>'; document.querySelector('#orderTotal').textContent = money.format(orderTotal(order)); document.querySelector('#deleteOrderButton').style.visibility = order.items.length ? 'visible':'hidden'; const paidNote=document.querySelector('#paidNote'); paidNote.hidden=!order.paidAmount; paidNote.textContent=order.paidAmount?`Ya pagado en cuentas separadas: ${money.format(order.paidAmount)}`:''; }
-function addProduct(productId) { const order=getOrder(state.currentOrderId), product=state.products.find(p=>p.id===productId); if(!order||!product)return; const found=order.items.find(i=>i.productId===productId); if(found)found.qty++; else order.items.push({productId:product.id,name:product.name,price:product.price,cost:Number(product.cost || 0),category:product.category,qty:1,inventoryId:product.inventoryId,recipe:product.recipe}); order.sync_status='pending'; order.updatedAt=Date.now(); saveState(); if(globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(()=>{}); renderOrderDialog(); }
+function productVisual(product) {
+  if (!product) return '🍾';
+  return product.image ? `<img src="${product.image}" alt="${escapeHtml(product.name || 'Producto')}" />` : escapeHtml(product.icon || '🍾');
+}
+globalThis.productVisual = productVisual;
+
+function renderOrderDialog() {
+  const order = getOrder(state.currentOrderId);
+  if (!order) return;
+
+  const catTabsEl = document.querySelector('#categoryTabs');
+  const prodGridEl = document.querySelector('#productGrid');
+  const searchInput = document.querySelector('#productSearch');
+
+  if (!catTabsEl || !prodGridEl) return;
+
+  // 1. Obtener lista completa de productos desde estado global / IndexedDB
+  const allProducts = getPOSProducts();
+
+  // 2. Extraer categorías únicas para los tabs
+  const rawCats = allProducts.map(p => String(p.category || 'General').trim()).filter(Boolean);
+  const uniqueCats = [...new Set(rawCats)];
+  if (uniqueCats.length === 0 && Array.isArray(state.categories)) {
+    state.categories.forEach(c => {
+      const clean = String(c || '').trim();
+      if (clean && !uniqueCats.includes(clean)) uniqueCats.push(clean);
+    });
+  }
+  const categories = ['Todos', ...uniqueCats];
+
+  // Si la categoría activa actual no es válida o quedó desactualizada, volver a 'Todos'
+  if (!state.activeCategory || !categories.includes(state.activeCategory)) {
+    state.activeCategory = 'Todos';
+  }
+
+  // Renderizar pestañas de categorías
+  catTabsEl.innerHTML = categories.map(cat => `
+    <button type="button" class="category-button ${state.activeCategory === cat ? 'active' : ''}" data-category="${escapeHtml(cat)}">
+      ${escapeHtml(cat)}
+    </button>
+  `).join('');
+
+  // 3. Filtrar productos según categoría activa y buscador
+  const search = String(state.search || '').trim().toLowerCase();
+  if (searchInput && document.activeElement !== searchInput && searchInput.value !== (state.search || '')) {
+    searchInput.value = state.search || '';
+  }
+
+  const products = allProducts.filter(p => {
+    if (!p) return false;
+    const pCat = String(p.category || 'General').trim();
+    if (state.activeCategory !== 'Todos' && pCat.toLowerCase() !== state.activeCategory.toLowerCase()) {
+      return false;
+    }
+    if (search) {
+      const pName = String(p.name || '').toLowerCase();
+      const pCode = String(p.code || '').toLowerCase();
+      const pCatLower = pCat.toLowerCase();
+      if (!pName.includes(search) && !pCode.includes(search) && !pCatLower.includes(search)) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  // 4. Renderizar tarjetas de productos con nombre, precio, categoría y stock
+  if (products.length > 0) {
+    prodGridEl.innerHTML = products.map(p => {
+      const stockVal = Number(p.stock ?? 0);
+      const isOutOfStock = stockVal <= 0;
+      const stockBadge = stockVal > 0
+        ? `<span class="product-stock-tag stock-available">${formatQty(stockVal)} disp.</span>`
+        : `<span class="product-stock-tag stock-out">Agotado</span>`;
+
+      return `
+        <button type="button" class="product ${isOutOfStock ? 'is-out-of-stock' : ''}" data-product="${escapeHtml(p.id)}" title="${escapeHtml(p.name || 'Producto')}">
+          <div class="product-header-row">
+            <span class="product-icon">${productVisual(p)}</span>
+            <span class="product-category-chip">${escapeHtml(p.category || 'General')}</span>
+          </div>
+          <strong class="product-title">${escapeHtml(p.name || 'Producto')}</strong>
+          <div class="product-footer-row">
+            <span class="product-price">${money.format(p.price || 0)}</span>
+            ${stockBadge}
+          </div>
+        </button>
+      `;
+    }).join('');
+  } else {
+    const isGlobalEmpty = allProducts.length === 0;
+    prodGridEl.innerHTML = isGlobalEmpty
+      ? `
+        <div class="pos-empty-catalog" style="grid-column: 1 / -1; text-align: center; padding: 48px 16px; color: var(--muted);">
+          <div style="font-size: 32px; margin-bottom: 12px;">📦</div>
+          <p style="font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 6px;">No hay productos registrados</p>
+          <p style="font-size: 13px; margin: 0 auto 16px; max-width: 340px;">Crea productos nuevos en la sección de Productos o importa tu catálogo desde Excel / CSV.</p>
+        </div>
+      `
+      : `
+        <div class="pos-empty-catalog" style="grid-column: 1 / -1; text-align: center; padding: 40px 16px; color: var(--muted);">
+          <div style="font-size: 28px; margin-bottom: 8px;">🔍</div>
+          <p style="font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px;">No encontramos ese producto</p>
+          <small style="color: var(--muted);">${search ? `Ningún producto coincide con "${escapeHtml(search)}"` : 'No hay productos en esta categoría'}</small>
+        </div>
+      `;
+  }
+
+  // 5. Renderizar ticket items
+  const ticketEl = document.querySelector('#ticketItems');
+  if (ticketEl) {
+    ticketEl.innerHTML = order.items.length
+      ? order.items.map(item => `
+          <div class="ticket-item">
+            <div>
+              <strong>${escapeHtml(item.name)}</strong>
+              ${item.category ? `<small class="muted" style="display:block;font-size:11px;">${escapeHtml(item.category)}</small>` : ''}
+            </div>
+            <span class="item-price">${money.format((item.price || 0) * (item.qty || 1))}</span>
+            <div class="quantity-control">
+              <button type="button" data-item-change="${escapeHtml(item.productId)}" data-delta="-1" aria-label="Disminuir">−</button>
+              <span>${item.qty}</span>
+              <button type="button" data-item-change="${escapeHtml(item.productId)}" data-delta="1" aria-label="Aumentar">+</button>
+            </div>
+          </div>
+        `).join('')
+      : '<p class="empty-ticket">Agrega productos para iniciar el pedido.</p>';
+  }
+
+  const orderTotalEl = document.querySelector('#orderTotal');
+  if (orderTotalEl) orderTotalEl.textContent = money.format(orderTotal(order));
+
+  const deleteBtn = document.querySelector('#deleteOrderButton');
+  if (deleteBtn) deleteBtn.style.visibility = order.items.length ? 'visible' : 'hidden';
+
+  const paidNote = document.querySelector('#paidNote');
+  if (paidNote) {
+    paidNote.hidden = !order.paidAmount;
+    paidNote.textContent = order.paidAmount ? `Ya pagado en cuentas separadas: ${money.format(order.paidAmount)}` : '';
+  }
+}
+globalThis.renderOrderDialog = renderOrderDialog;
+globalThis.renderPOSProducts = renderOrderDialog;
+globalThis.loadProductsToOrder = renderOrderDialog;
+
+function addProduct(productId) {
+  const order = getOrder(state.currentOrderId);
+  const prods = getPOSProducts();
+  const product = prods.find(p => p.id === productId);
+  if (!order || !product) return;
+  const found = order.items.find(i => i.productId === productId);
+  if (found) found.qty++;
+  else {
+    order.items.push({
+      productId: product.id,
+      name: product.name,
+      price: product.price,
+      cost: Number(product.cost || 0),
+      category: product.category,
+      qty: 1,
+      inventoryId: product.inventoryId || `stock-${product.id}`,
+      recipe: product.recipe || { [product.inventoryId || `stock-${product.id}`]: 1 }
+    });
+  }
+  order.sync_status = 'pending';
+  order.updatedAt = Date.now();
+  saveState();
+  if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
+  renderOrderDialog();
+}
+globalThis.addProduct = addProduct;
 function changeItem(productId, delta) { const order=getOrder(state.currentOrderId); const item=order?.items.find(i=>i.productId===productId); if(!item)return; item.qty+=Number(delta); if(item.qty<=0)order.items=order.items.filter(i=>i!==item); order.sync_status='pending'; order.updatedAt=Date.now(); saveState(); if(globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(()=>{}); renderOrderDialog(); }
 function saveOrder() { const order=getOrder(state.currentOrderId); if(!order)return; order.note=document.querySelector('#orderNote').value.trim(); order.sync_status='pending'; order.updatedAt=Date.now(); if(!order.items.length){state.orders=state.orders.filter(o=>o.id!==order.id);saveState();if(globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(()=>{});document.querySelector('#orderDialog').close();state.currentOrderId=null;renderAll();return showToast('Pedido vacío descartado.');} saveState();if(globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(()=>{});document.querySelector('#orderDialog').close();state.currentOrderId=null;renderAll();showToast('Pedido guardado. Queda abierto hasta cobrarlo.'); }
 const PAYMENT_METHODS = ['Efectivo', 'Nequi', 'Daviplata', 'Tarjeta / Datáfono', 'Transferencia'];
@@ -1387,7 +1702,17 @@ document.addEventListener('click', event => {
   if (target.id === 'exportButton') exportBackup();
   if (target.id === 'menuButton') document.querySelector('#menuDialog').showModal();
 });
-document.querySelector('#productSearch').addEventListener('input', e => { state.search = e.target.value; renderOrderDialog(); });
+const searchEl = document.querySelector('#productSearch');
+if (searchEl) {
+  searchEl.addEventListener('input', e => {
+    state.search = e.target.value || '';
+    renderOrderDialog();
+  });
+  searchEl.addEventListener('search', () => {
+    state.search = searchEl.value || '';
+    renderOrderDialog();
+  });
+}
 document.querySelector('#orderNote').addEventListener('input', e => { const order = getOrder(state.currentOrderId); if (order) { order.note = e.target.value; saveState(); } });
 document.querySelector('#amountReceived').addEventListener('input', updateTenderChange);
 document.querySelector('#tenderCashReceived')?.addEventListener('input', updateTenderChange);

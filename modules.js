@@ -70,11 +70,17 @@ function logAudit(action, detail = '', extra = {}) {
 }
 
 function requireOpenShift() {
-  if (isShiftOpen()) return true;
-  if (can('shift')) { document.querySelector('#openShiftDialog').showModal(); showToast('Debes abrir un turno de caja antes de registrar movimientos.'); }
-  else showToast('La caja está cerrada. Pide al cajero o al administrador que abra el turno.');
+  const isOpen = (typeof isShiftOpen === 'function' ? isShiftOpen() : (globalThis.isShiftOpen ? globalThis.isShiftOpen() : (globalThis.state?.cashShift?.status === 'open')));
+  if (isOpen) return true;
+  if (typeof can === 'function' && can('shift')) {
+    document.querySelector('#openShiftDialog')?.showModal?.();
+    if (typeof showToast === 'function') showToast('Debes abrir un turno de caja antes de registrar movimientos.');
+  } else {
+    if (typeof showToast === 'function') showToast('La caja está cerrada. Pide al cajero o al administrador que abra el turno.');
+  }
   return false;
 }
+globalThis.requireOpenShift = requireOpenShift;
 
 function showView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active-view', v.id === id));

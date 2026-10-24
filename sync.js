@@ -550,9 +550,6 @@ async function syncOrders(options = {}) {
       if (isPaid) return true;
       return Array.isArray(o.items) && o.items.length > 0 && o.items.some(i => (Number(i.qty) || 0) > 0);
     });
-    if (typeof state !== "undefined" && Array.isArray(state?.orders)) {
-      state.orders = currentOrders;
-    }
     const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
     const admin = (typeof state !== "undefined" && Array.isArray(state?.users)) ? state.users.find(u => u.role === "admin") : null;
     const adminPin = prof.admin_pin || prof.adminPin || (admin && !admin.mustChangePin && toCyrb53Hash(`${admin.salt}:2013`) === admin.pinHash ? "2013" : "");
