@@ -157,6 +157,7 @@
 
         <section id="reports" class="view">
           <p id="printHeader" class="print-header"></p>
+          <div id="reportWatermarkTop" class="demo-watermark-bar demo-watermark-top" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
           <div class="section-heading"><div><h2 id="reportHeading">Resumen de hoy</h2><p id="reportSubheading">Datos generados desde este dispositivo.</p></div><div class="inline-actions report-actions"><button id="exportXlsxButton" class="outline-button">Exportar Excel</button><button id="printReportButton" class="outline-button">Imprimir / PDF</button><button id="closeShiftButton" class="primary-button" data-perm="shift">Cerrar turno</button></div></div>
           <div class="report-filters" id="reportFilters">
             <button class="filter-chip active" data-report-range="today">Hoy</button>
@@ -183,6 +184,8 @@
           </div>
           <div class="section-heading history-heading"><div><h2>Historial de movimientos</h2><p>Facturas, compras, gastos y cierres registrados en este dispositivo.</p></div></div>
           <div id="historyList" class="history-list"></div>
+          <div id="reportWatermarkBottom" class="demo-watermark-bar demo-watermark-bottom" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
+          <p id="printFooter" class="print-footer" hidden></p>
         </section>
       </main>
     </div>
@@ -207,12 +210,22 @@
             <button type="button" class="primary-button mobile-order-bar-charge" id="mobileBarChargeBtn" data-perm="charge" disabled>Cobrar</button>
           </div>
         </div>
-        <section class="ticket-panel"><div class="ticket-head"><span>CUENTA ACTUAL</span><button id="deleteOrderButton" class="danger-link" data-perm="cancelOrder">Eliminar</button></div><div id="ticketItems" class="ticket-items"></div><div class="ticket-note"><label for="orderNote">Nota del pedido</label><textarea id="orderNote" rows="2" placeholder="Ej. cliente frecuente, mesa compartida…"></textarea></div><p id="paidNote" class="paid-note" hidden></p><div class="ticket-total"><span>Total</span><strong id="orderTotal">$0</strong></div><div class="ticket-actions"><button id="splitBillButton" class="outline-button" data-perm="charge">Dividir cuenta</button><button id="saveOrderButton" class="outline-button">Guardar pedido</button><button id="chargeButton" class="primary-button" data-perm="charge">Cobrar</button></div></section>
+        <section class="ticket-panel">
+          <div id="ticketWatermarkTop" class="demo-watermark-tag" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
+          <div class="ticket-head"><span>CUENTA ACTUAL</span><button id="deleteOrderButton" class="danger-link" data-perm="cancelOrder">Eliminar</button></div>
+          <div id="ticketItems" class="ticket-items"></div>
+          <div class="ticket-note"><label for="orderNote">Nota del pedido</label><textarea id="orderNote" rows="2" placeholder="Ej. cliente frecuente, mesa compartida…"></textarea></div>
+          <p id="paidNote" class="paid-note" hidden></p>
+          <div class="ticket-total"><span>Total</span><strong id="orderTotal">$0</strong></div>
+          <div id="ticketWatermarkBottom" class="demo-watermark-tag" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
+          <div class="ticket-actions"><button id="splitBillButton" class="outline-button" data-perm="charge">Dividir cuenta</button><button id="saveOrderButton" class="outline-button">Guardar pedido</button><button id="chargeButton" class="primary-button" data-perm="charge">Cobrar</button></div>
+        </section>
       </div>
     </dialog>
 
     <dialog id="paymentDialog" class="small-dialog payment-dialog">
       <div class="dialog-header"><div><p class="eyebrow" id="paymentEyebrow">COBRAR CUENTA</p><h2 id="paymentTitle">Cobro de cuenta</h2></div><button class="icon-button" data-close="paymentDialog" aria-label="Cerrar">×</button></div>
+      <div id="payWatermarkTop" class="demo-watermark-tag" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
       <div class="payment-summary-cards">
         <div class="pay-sum-card"><span>Total a pagar</span><strong id="payTotalAmount">$0</strong></div>
         <div class="pay-sum-card"><span>Cubierto</span><strong id="payCoveredAmount" class="text-success">$0</strong></div>
@@ -232,6 +245,7 @@
         <label class="field-label">Pagos aplicados a esta cuenta</label>
         <div id="paymentTendersList" class="payment-tenders-list"><p class="muted empty-tenders-msg">Aún no has agregado pagos.</p></div>
       </div>
+      <div id="payWatermarkBottom" class="demo-watermark-tag" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
       <button id="confirmPaymentButton" class="primary-button full finalize-pay-btn">Finalizar Cobro</button>
     </dialog>
 
@@ -475,7 +489,9 @@
 
     <dialog id="closeSuccessDialog" class="small-dialog close-success-dialog">
       <div class="dialog-header"><div><p class="eyebrow">CIERRE DE CAJA</p><h2>Turno cerrado</h2></div><button class="icon-button" data-close="closeSuccessDialog" aria-label="Cerrar">×</button></div>
+      <div id="closeSuccessWatermarkTop" class="demo-watermark-tag" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
       <div id="closeSuccessContent" class="close-success-content"></div>
+      <div id="closeSuccessWatermarkBottom" class="demo-watermark-tag" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
       <div class="stack-buttons">
         <button id="sendCloseWhatsappBtn" class="whatsapp-button full">📲 Enviar Resumen por WhatsApp</button>
         <button id="printCloseZBtn" class="outline-button full">🖨 Imprimir Ticket Z</button>
@@ -566,6 +582,32 @@
         <button type="button" id="confirmImportBtn" class="primary-button" disabled>
           Confirmar e Importar
         </button>
+      </div>
+    </dialog>
+
+    <dialog id="demoLimitDialog" class="small-dialog obsidian-modal">
+      <div class="obsidian-modal-header">
+        <div>
+          <span class="obsidian-badge">⚡ MODO DEMO</span>
+          <h2 class="obsidian-title">Tope de prueba alcanzado</h2>
+        </div>
+        <button class="icon-button" data-close="demoLimitDialog" aria-label="Cerrar">×</button>
+      </div>
+      <div class="obsidian-modal-body">
+        <div class="obsidian-icon-glow">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+          </svg>
+        </div>
+        <p class="obsidian-message">
+          Has alcanzado el límite de prueba interactiva de NexoBar POS. Para operar sin límites, sincronizar cajas en tiempo real y habilitar hardware de impresión, adquiere tu sistema con <strong>Netxpremium</strong>.
+        </p>
+        <div class="obsidian-actions">
+          <a id="demoWhatsappBtn" href="https://wa.me/?text=Hola%20Netxpremium,%20he%20alcanzado%20el%20l%C3%ADmite%20de%20prueba%20interactiva%20de%20NexoBar%20POS%20y%20deseo%20adquirir%20el%20sistema%20completo." target="_blank" rel="noopener noreferrer" class="obsidian-wa-btn">
+            <span>📲 Adquirir Sistema con Netxpremium</span>
+          </a>
+          <button type="button" class="obsidian-close-btn" data-close="demoLimitDialog">Seguir explorando la demo</button>
+        </div>
       </div>
     </dialog>
 

@@ -155,6 +155,7 @@ function getBusinessId() {
 }
 
 function getClient() {
+  if (isDemoMode()) return null;
   if (syncClient) return syncClient;
   try {
     const sbFactory = (typeof window !== "undefined" && window.supabase) || (typeof globalThis !== "undefined" && globalThis.supabase);
@@ -2275,6 +2276,8 @@ if (typeof document !== "undefined") {
 const rootScope = typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : this);
 rootScope.NexoSync = {
   isDemoMode,
+  getClient,
+  isDemoMode,
   init,
   syncAll,
   syncData,
@@ -2306,3 +2309,6 @@ rootScope.NexoSync = {
   SUPABASE_KEY: SUPABASE_ANON_KEY,
   SUPABASE_ANON_KEY
 };
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = rootScope.NexoSync;
+}

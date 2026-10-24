@@ -4,7 +4,36 @@
    - En la app de Windows (Electron) además guarda un archivo espejo en disco y respalda a una carpeta.
    Se carga ANTES de modules.js y app.js: solo declaraciones, el arranque lo hace bootstrap() en app.js. */
 
-const DB_NAME = 'brasa-pos', DB_STORE = 'kv', DB_KEY = 'state', LEGACY_KEY = 'brasa-pos-v1';
+function isDemoMode() {
+  if (typeof globalThis !== 'undefined' && typeof globalThis.__FORCE_DEMO_MODE__ === 'boolean') {
+    return globalThis.__FORCE_DEMO_MODE__;
+  }
+  try {
+    if (typeof window !== 'undefined' && window.location) {
+      const search = window.location.search || '';
+      if (search.includes('demo=true')) return true;
+      if (search.includes('demo=false') || search.includes('prod=true')) return false;
+      const isDesktop = Boolean(
+        (window.desktop && window.desktop.isDesktop) ||
+        (typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.includes('Electron')) ||
+        window.location.protocol === 'file:'
+      );
+      if (isDesktop) return false;
+      const hostname = window.location.hostname || '';
+      const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
+      return !isLocalhost;
+    }
+  } catch (e) {}
+  return false;
+}
+globalThis.isDemoMode = isDemoMode;
+
+function getDbName() {
+  return isDemoMode() ? 'nexobar_demo_db' : 'brasa-pos';
+}
+globalThis.getDbName = getDbName;
+
+const DB_STORE = 'kv', DB_KEY = 'state', LEGACY_KEY = 'brasa-pos-v1', DEMO_FALLBACK_KEY = 'nexobar_demo_state';
 const BACKUP_DEFAULTS = { onClose: true, daily: true, lastAt: null, lastReason: '', lastFile: '', lastWhere: '' };
 globalThis.BACKUP_DEFAULTS = BACKUP_DEFAULTS;
 let storageReady = false, storageMode = 'indexeddb', storageDb = null;
@@ -15,7 +44,7 @@ const storageStatus = { lastSavedAt: null, error: null, migrated: false, restore
 function idbOpen() {
   return new Promise((resolve, reject) => {
     if (!('indexedDB' in globalThis)) return reject(new Error('Este navegador no tiene IndexedDB.'));
-    const request = indexedDB.open(DB_NAME, 1);
+    const request = indexedDB.open(getDbName(), 1);
     request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(DB_STORE)) request.result.createObjectStore(DB_STORE); };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error('No se pudo abrir la base de datos.'));
@@ -31,7 +60,11 @@ function idbRequest(db, mode, action) {
 }
 const idbGet = (db, key) => idbRequest(db, 'readonly', store => store.get(key));
 const idbPut = (db, key, value) => idbRequest(db, 'readwrite', store => store.put(value, key));
-function readLegacy() { try { const raw = localStorage.getItem(LEGACY_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; } }
+function readLegacy() {
+  if (isDemoMode()) return null;
+  try { const raw = localStorage.getItem(LEGACY_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+globalThis.readLegacy = readLegacy;
 
 /* Devuelve los datos guardados (o null si es la primera vez). */
 async function storageInit() {
@@ -39,19 +72,27 @@ async function storageInit() {
   try { storageDb = await idbOpen(); storageMode = 'indexeddb'; } catch (error) { storageDb = null; storageMode = 'localstorage'; storageStatus.error = String(error.message || error); }
   if (storageDb) {
     saved = (await idbGet(storageDb, DB_KEY)) ?? null;
-    if (!saved && globalThis.desktop?.loadMirror) { // IndexedDB vacío pero existe el archivo espejo del escritorio
-      try { const raw = await desktop.loadMirror(); if (raw) { saved = JSON.parse(raw); storageStatus.restoredFromFile = true; await idbPut(storageDb, DB_KEY, saved); } } catch { saved = null; }
-    }
-    if (!saved) { // migración desde localStorage (versiones anteriores)
-      const legacy = readLegacy();
-      if (legacy) {
-        await idbPut(storageDb, DB_KEY, legacy); const check = await idbGet(storageDb, DB_KEY);
-        if (check && JSON.stringify(check).length === JSON.stringify(legacy).length) { saved = check; storageStatus.migrated = true; try { localStorage.removeItem(LEGACY_KEY); } catch { /* sin permiso: se deja */ } } else saved = legacy;
+    if (!isDemoMode()) {
+      if (!saved && globalThis.desktop?.loadMirror) { // IndexedDB vacío pero existe el archivo espejo del escritorio
+        try { const raw = await desktop.loadMirror(); if (raw) { saved = JSON.parse(raw); storageStatus.restoredFromFile = true; await idbPut(storageDb, DB_KEY, saved); } } catch { saved = null; }
+      }
+      if (!saved) { // migración desde localStorage (versiones anteriores)
+        const legacy = readLegacy();
+        if (legacy) {
+          await idbPut(storageDb, DB_KEY, legacy); const check = await idbGet(storageDb, DB_KEY);
+          if (check && JSON.stringify(check).length === JSON.stringify(legacy).length) { saved = check; storageStatus.migrated = true; try { localStorage.removeItem(LEGACY_KEY); } catch { /* sin permiso: se deja */ } } else saved = legacy;
+        }
       }
     }
-  } else saved = readLegacy();
+  } else {
+    if (isDemoMode()) {
+      try { const raw = sessionStorage.getItem(DEMO_FALLBACK_KEY); saved = raw ? JSON.parse(raw) : null; } catch { saved = null; }
+    } else {
+      saved = readLegacy();
+    }
+  }
   try { navigator.storage?.persist?.().catch(() => {}); } catch { /* opcional */ }
-  if (globalThis.desktop?.onFlushRequest) desktop.onFlushRequest(async () => { await flushAll(); desktop.flushDone(); });
+  if (!isDemoMode() && globalThis.desktop?.onFlushRequest) desktop.onFlushRequest(async () => { await flushAll(); desktop.flushDone(); });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushAll(); });
   window.addEventListener('pagehide', () => { flushAll(); });
   return saved;
@@ -61,18 +102,30 @@ async function storageInit() {
 function scheduleSave() { if (!storageReady) return; clearTimeout(saveTimer); saveTimer = setTimeout(() => { saveChain = saveChain.then(persistNow).catch(() => {}); }, 250); }
 async function persistNow() {
   try {
-    if (storageMode === 'indexeddb') await idbPut(storageDb, DB_KEY, state); else localStorage.setItem(LEGACY_KEY, JSON.stringify(state));
-    storageStatus.lastSavedAt = Date.now(); storageStatus.error = null; scheduleMirror();
+    if (storageMode === 'indexeddb') {
+      await idbPut(storageDb, DB_KEY, state);
+    } else if (isDemoMode()) {
+      sessionStorage.setItem(DEMO_FALLBACK_KEY, JSON.stringify(state));
+    } else {
+      localStorage.setItem(LEGACY_KEY, JSON.stringify(state));
+    }
+    storageStatus.lastSavedAt = Date.now(); storageStatus.error = null;
+    if (!isDemoMode()) scheduleMirror();
   } catch (error) {
     storageStatus.error = String(error.message || error);
     if (Date.now() - lastSaveErrorToast > 60000) { lastSaveErrorToast = Date.now(); showToast('⚠ No se pudo guardar en el equipo. Descarga un respaldo ahora.'); }
   }
 }
-function scheduleMirror() { if (!globalThis.desktop?.saveMirror) return; clearTimeout(mirrorTimer); mirrorTimer = setTimeout(() => { try { desktop.saveMirror(JSON.stringify(state)).catch(() => {}); } catch { /* sin espejo */ } }, 2000); }
+function scheduleMirror() {
+  if (isDemoMode()) return;
+  if (!globalThis.desktop?.saveMirror) return;
+  clearTimeout(mirrorTimer);
+  mirrorTimer = setTimeout(() => { try { desktop.saveMirror(JSON.stringify(state)).catch(() => {}); } catch { /* sin espejo */ } }, 2000);
+}
 async function flushAll() {
   clearTimeout(saveTimer); clearTimeout(mirrorTimer); if (!storageReady) return;
   saveChain = saveChain.then(persistNow).catch(() => {}); await saveChain;
-  if (globalThis.desktop?.saveMirror) { try { await desktop.saveMirror(JSON.stringify(state)); } catch { /* sin espejo */ } }
+  if (!isDemoMode() && globalThis.desktop?.saveMirror) { try { await desktop.saveMirror(JSON.stringify(state)); } catch { /* sin espejo */ } }
 }
 
 /* ---------- Respaldos ---------- */
@@ -81,8 +134,8 @@ function backupFileName(slug) { const d = new Date(), pad = n => String(n).padSt
 async function runBackup(reason = 'Manual', slug = 'manual', delayToast = false) {
   const settings = backupSettings(), json = JSON.stringify(state), name = backupFileName(slug);
   let ok = true, where = 'Carpeta de descargas del navegador';
-  if (globalThis.desktop?.saveBackup) { try { const result = await desktop.saveBackup(name, json); ok = !!result.ok; where = result.ok ? result.path : (result.error || 'Error al guardar'); } catch (error) { ok = false; where = String(error.message || error); } }
-  else { try { downloadBlob(new Blob([json], { type: 'application/json' }), name); } catch (error) { ok = false; where = String(error.message || error); } }
+  if (!isDemoMode() && globalThis.desktop?.saveBackup) { try { const result = await desktop.saveBackup(name, json); ok = !!result.ok; where = result.ok ? result.path : (result.error || 'Error al guardar'); } catch (error) { ok = false; where = String(error.message || error); } }
+  else { try { downloadBlob(new Blob([json], { type: 'application/json' }), isDemoMode() ? `nexobar-pos-respaldo-DEMO-${today()}.json` : name); } catch (error) { ok = false; where = String(error.message || error); } }
   const at = Date.now();
   if (ok) Object.assign(settings, { lastAt: at, lastReason: reason, lastFile: name, lastWhere: where });
   state.backupLog = [...(state.backupLog || []), { at, reason, file: name, where, bytes: json.length, ok }].slice(-30);

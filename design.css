@@ -1190,3 +1190,189 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
   border-top: 1px solid var(--line);
   padding-top: 16px;
 }
+
+/* ==========================================================================
+   Modo Demo: Modal Obsidian / Dark & Marcas de Agua (Netxpremium)
+   ========================================================================== */
+.obsidian-modal {
+  background: linear-gradient(150deg, #0b0e14 0%, #131822 55%, #18202d 100%) !important;
+  color: #F3F4F6 !important;
+  border: 1px solid rgba(255, 140, 50, 0.35) !important;
+  border-radius: 18px !important;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.9), 0 0 35px rgba(255, 140, 50, 0.15) !important;
+  max-width: 460px !important;
+  width: 90% !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.obsidian-modal::backdrop {
+  background: rgba(4, 7, 12, 0.85) !important;
+  backdrop-filter: blur(8px) !important;
+}
+
+.obsidian-modal-header {
+  padding: 22px 24px 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.obsidian-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 140, 50, 0.18);
+  color: #FF8C32;
+  border: 1px solid rgba(255, 140, 50, 0.4);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 3px 10px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.obsidian-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: #FFFFFF;
+  letter-spacing: -0.01em;
+}
+
+.obsidian-modal-body {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  text-align: center;
+}
+
+.obsidian-icon-glow {
+  width: 68px;
+  height: 68px;
+  margin: 0 auto;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 140, 50, 0.28) 0%, rgba(255, 140, 50, 0.06) 70%);
+  border: 1.5px solid rgba(255, 140, 50, 0.45);
+  display: grid;
+  place-items: center;
+  color: #FF8C32;
+  box-shadow: 0 0 24px rgba(255, 140, 50, 0.25);
+}
+
+.obsidian-icon-glow svg {
+  width: 32px;
+  height: 32px;
+  fill: currentColor;
+}
+
+.obsidian-message {
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: #D1D5DB;
+  margin: 0;
+}
+
+.obsidian-message strong {
+  color: #FFFFFF;
+  font-weight: 700;
+}
+
+.obsidian-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.obsidian-wa-btn {
+  background: linear-gradient(135deg, #10B981 0%, #059669 100%) !important;
+  color: #FFFFFF !important;
+  border: 0 !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  padding: 14px 18px !important;
+  border-radius: 12px !important;
+  text-decoration: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 10px !important;
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35) !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+}
+
+.obsidian-wa-btn:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.45) !important;
+}
+
+.obsidian-close-btn {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #9CA3AF !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 10px !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  padding: 11px !important;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease !important;
+}
+
+.obsidian-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #FFFFFF !important;
+}
+
+/* Marcas de Agua */
+.demo-watermark-bar {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px dashed rgba(245, 158, 11, 0.55);
+  color: #F59E0B;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 10px 16px;
+  border-radius: 8px;
+  text-align: center;
+  margin: 14px 0;
+  box-sizing: border-box;
+}
+
+.demo-watermark-tag {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px dashed rgba(245, 158, 11, 0.45);
+  color: #F59E0B;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  border-radius: 6px;
+  text-align: center;
+  margin: 6px 0;
+  box-sizing: border-box;
+}
+
+.print-footer {
+  display: none;
+}
+
+@media print {
+  .print-footer {
+    display: block !important;
+    text-align: center;
+    font-size: 11px;
+    font-weight: bold;
+    border-top: 1px dashed #000;
+    padding-top: 8px;
+    margin-top: 24px;
+    color: #000;
+  }
+}

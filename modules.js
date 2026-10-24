@@ -17,7 +17,14 @@ let loginTarget = null, loginPin = '', loginFails = 0, loginLockUntil = 0;
 let editingUserId = null, forcedPinChange = false;
 
 function me() { return session ? state.users.find(u => u.id === session && u.active !== false) || null : null; }
-function can(perm) { const user = me(); if (!user) return false; const perms = ROLE_PERMS[user.role]; return perms === '*' || (Array.isArray(perms) && perms.includes(perm)); }
+function can(perm) {
+  const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
+  if (isDemo) return true;
+  const user = me();
+  if (!user) return false;
+  const perms = ROLE_PERMS[user.role];
+  return perms === '*' || (Array.isArray(perms) && perms.includes(perm));
+}
 function actor() { const user = me(); return { userId: user?.id || null, userName: user?.name || '' }; }
 globalThis.me = me;
 globalThis.can = can;
@@ -43,7 +50,20 @@ function ensureExtras(s) {
   ['users', 'suppliers', 'stockLog', 'auditLog', 'backupLog'].forEach(key => { s[key] = Array.isArray(s[key]) ? structuredClone(s[key]) : []; });
   s.backupSettings = { ...BACKUP_DEFAULTS, ...(s.backupSettings || {}) };
   s.invoiceCounter = Number(s.invoiceCounter || 0);
-  if (!s.users.length) {
+  if (typeof isDemoMode === 'function' && isDemoMode()) {
+    s.users = [
+      {
+        id: 'u_demo_guest',
+        name: 'Invitado Demo',
+        role: 'admin',
+        active: true,
+        mustChangePin: false,
+        salt: 'demo_salt',
+        pinHash: hashPin('1234', 'demo_salt'),
+        createdAt: Date.now()
+      }
+    ];
+  } else if (!s.users.length) {
     const existingPin = s.profile?.admin_pin || s.profile?.adminPin;
     const admin = newUser('Administrador', 'admin', existingPin || '1234');
     admin.mustChangePin = !existingPin;
@@ -464,6 +484,9 @@ globalThis.renderTeam = renderTeam;
 globalThis.renderSuppliers = renderSuppliers;
 globalThis.renderStockLog = renderStockLog;
 globalThis.renderReports = renderReports;
+globalThis.printReport = printReport;
+globalThis.reportSheets = reportSheets;
+globalThis.exportReportXlsx = exportReportXlsx;
 function saveInventory() {
   if (!requireOpenShift()) return;
   const item = state.inventory.find(i => i.id === document.querySelector('#inventorySelect').value), delta = Number(document.querySelector('#inventoryAmount').value), reason = document.querySelector('#inventoryReason').value.trim();
@@ -638,6 +661,12 @@ function hourLabel(h) { return `${String(h).padStart(2, '0')}:00`; }
 
 function renderReports() {
   if (typeof renderReportPeriod === 'function') renderReportPeriod(); else if (typeof globalThis.renderReportPeriod === 'function') globalThis.renderReportPeriod();
+  const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
+  const wmTop = document.querySelector('#reportWatermarkTop');
+  const wmBottom = document.querySelector('#reportWatermarkBottom');
+  if (wmTop) wmTop.hidden = !isDemo;
+  if (wmBottom) wmBottom.hidden = !isDemo;
+
   const $ = s => document.querySelector(s), d = reportDataset(), { cur, old } = d, compact = new Intl.NumberFormat('es-CO', { notation: 'compact', maximumFractionDigits: 1 });
   $('#reportTotal').textContent = money.format(cur.total);
   $('#reportTicket').textContent = `${cur.count} ${cur.count === 1 ? 'ticket' : 'tickets'} · Promedio ${money.format(cur.avg)}`;
@@ -776,16 +805,39 @@ function reportSheets() {
   sheets.push({ name: 'Compras', widths: [12, 24, 16, 14, 14, 10], rows: [['Fecha', 'Proveedor', 'Factura', 'Medio de pago', 'Total', 'Productos'].map(cellH), ...d.purchases.map(p => [p.date, p.supplier, p.invoice, p.method || '', cellM(p.total), cellI(p.lines.length)])] });
   sheets.push({ name: 'Gastos', widths: [12, 22, 34, 14, 14], rows: [['Fecha', 'Tipo', 'Descripción', 'Medio de pago', 'Valor'].map(cellH), ...d.expenses.map(e => [e.date, e.category, e.description, e.method, cellM(e.amount)])] });
   sheets.push({ name: 'Mermas y conteos', widths: [12, 16, 24, 12, 8, 14, 34, 16], rows: [['Fecha', 'Tipo', 'Insumo', 'Cantidad', 'Unidad', 'Valor', 'Motivo', 'Usuario'].map(cellH), ...d.stock.map(e => [e.date, STOCK_TYPES[e.type] || e.type, e.itemName, cellD(e.delta), e.unit || '', cellM(e.value || 0), e.reason || '', e.userName || ''])] });
+
+  const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
+  if (isDemo) {
+    sheets.forEach(s => {
+      s.rows.unshift([{ v: 'DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM', s: XS.title }]);
+      s.rows.push([], [{ v: 'DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM', s: XS.bold }]);
+    });
+  }
   return sheets;
 }
 function downloadBlob(blob, filename) { const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1500); }
 function exportReportXlsx() {
   if (!can('view.reports')) return deny();
-  const { from, to } = reportBounds(); downloadBlob(buildXlsx(reportSheets()), `reporte-${from}${from === to ? '' : '_a_' + to}.xlsx`); showToast('Reporte de Excel descargado.');
+  const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
+  const { from, to } = reportBounds();
+  const filename = isDemo ? `reporte-DEMO-NETXPREMIUM-${from}${from === to ? '' : '_a_' + to}.xlsx` : `reporte-${from}${from === to ? '' : '_a_' + to}.xlsx`;
+  downloadBlob(buildXlsx(reportSheets()), filename);
+  showToast('Reporte de Excel descargado.');
 }
 function printReport() {
   if (!can('view.reports')) return deny();
-  const { from, to } = reportBounds(); document.querySelector('#printHeader').textContent = `${state.profile?.name || 'NexoBar'} · Reporte ${from === to ? 'del ' + shortDate(from, true) : 'del ' + shortDate(from) + ' al ' + shortDate(to, true)} · generado ${new Date().toLocaleString('es-CO')}`;
+  const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
+  const watermarkPrefix = isDemo ? 'DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM · ' : '';
+  const { from, to } = reportBounds();
+  const headerEl = document.querySelector('#printHeader');
+  if (headerEl) {
+    headerEl.textContent = `${watermarkPrefix}${state.profile?.name || 'NexoBar'} · Reporte ${from === to ? 'del ' + shortDate(from, true) : 'del ' + shortDate(from) + ' al ' + shortDate(to, true)} · generado ${new Date().toLocaleString('es-CO')}`;
+  }
+  const footerEl = document.querySelector('#printFooter');
+  if (footerEl) {
+    footerEl.textContent = isDemo ? 'DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM' : '';
+    footerEl.hidden = !isDemo;
+  }
   window.print();
 }
 
@@ -851,6 +903,18 @@ function initModules() {
   document.addEventListener('click', handleModuleClick); document.addEventListener('input', handleModuleInput); document.addEventListener('change', handleModuleChange); document.addEventListener('keydown', handleLoginKeys);
   document.querySelector('#loginDialog').addEventListener('cancel', e => e.preventDefault());
   document.querySelector('#pinDialog').addEventListener('cancel', e => { if (forcedPinChange) e.preventDefault(); });
+  if (typeof isDemoMode === 'function' && isDemoMode()) {
+    const guest = state.users.find(u => u.id === 'u_demo_guest') || state.users[0];
+    if (guest) {
+      session = guest.id;
+      applyPermissions();
+      renderAll();
+      const loginDlg = document.querySelector('#loginDialog');
+      if (loginDlg && loginDlg.open) loginDlg.close();
+    }
+    return;
+  }
   const saved = sessionStorage.getItem('brasa-session');
   if (saved && state.users.some(u => u.id === saved && u.active !== false)) { session = saved; applyPermissions(); renderAll(); if (me().mustChangePin) openPinDialog(true); } else showLogin();
 }
+globalThis.initModules = initModules;

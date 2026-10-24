@@ -16,7 +16,7 @@ const defaultState = {
   orders: [], payments: [], purchases: [], expenses: [], closedShifts: [],
   users: [], suppliers: [], stockLog: [], auditLog: [], invoiceCounter: 0, backupLog: [], backupSettings: {}
 };
-let state = normalizeState(defaultState); // provisional: bootstrap() carga los datos guardados
+let state = structuredClone(defaultState); // provisional: bootstrap() carga los datos guardados
 globalThis.state = state;
 globalThis.defaultState = defaultState;
 
@@ -46,69 +46,214 @@ function isDemoMode() {
 globalThis.isDemoMode = isDemoMode;
 
 const DEMO_PRODUCTS = [
-  { id: 'demo_1', name: 'Cerveza Club Colombia Dorada', category: 'Cervezas', price: 7000, cost: 3500, stock: 24, icon: '🍺' },
-  { id: 'demo_2', name: 'Cerveza Corona Extra 355ml', category: 'Cervezas', price: 9000, cost: 4800, stock: 18, icon: '🍺' },
-  { id: 'demo_3', name: 'Cerveza Stella Artois', category: 'Cervezas', price: 10000, cost: 5200, stock: 15, icon: '🍺' },
-  { id: 'demo_4', name: 'Mojito Clásico', category: 'Cocteles', price: 20000, cost: 7000, stock: 12, icon: '🍸' },
-  { id: 'demo_5', name: 'Gin Tonic Gordons', category: 'Cocteles', price: 24000, cost: 8500, stock: 10, icon: '🍸' },
-  { id: 'demo_6', name: 'Margarita Tradicional', category: 'Cocteles', price: 22000, cost: 8000, stock: 14, icon: '🍸' },
-  { id: 'demo_7', name: 'Aguardiente Antioqueño Azul 750ml', category: 'Licores', price: 75000, cost: 42000, stock: 6, icon: '🍾' },
-  { id: 'demo_8', name: 'Ron Medellín Añejo 8 Años', category: 'Licores', price: 95000, cost: 55000, stock: 5, icon: '🍾' },
-  { id: 'demo_9', name: 'Whisky Old Parr 12 Años', category: 'Licores', price: 180000, cost: 110000, stock: 4, icon: '🥃' },
-  { id: 'demo_10', name: 'Agua Manantial con Gas 600ml', category: 'Sin alcohol', price: 3500, cost: 1500, stock: 20, icon: '🥤' },
-  { id: 'demo_11', name: 'Gaseosa Coca-Cola 400ml', category: 'Sin alcohol', price: 4000, cost: 2000, stock: 24, icon: '🥤' },
-  { id: 'demo_12', name: 'Red Bull Energy Drink', category: 'Sin alcohol', price: 12000, cost: 7000, stock: 16, icon: '⚡' },
-  { id: 'demo_13', name: 'Nachos con Queso y Guacamole', category: 'Comidas', price: 18000, cost: 7500, stock: 10, icon: '🍟' },
-  { id: 'demo_14', name: 'Picada de Carnes para Dos', category: 'Comidas', price: 38000, cost: 18000, stock: 8, icon: '🍖' }
+  { id: 'demo_1', name: 'Cerveza Corona Extra 355ml', category: 'Cervezas', price: 9000, cost: 4800, stock: 18, icon: '🍺' },
+  { id: 'demo_2', name: 'Cerveza Club Colombia Dorada', category: 'Cervezas', price: 7000, cost: 3500, stock: 24, icon: '🍺' },
+  { id: 'demo_3', name: 'Papas Francesas Rústicas', category: 'Comidas', price: 15000, cost: 6000, stock: 15, icon: '🍟' },
+  { id: 'demo_4', name: 'Cerveza Stella Artois', category: 'Cervezas', price: 10000, cost: 5200, stock: 15, icon: '🍺' },
+  { id: 'demo_5', name: 'Mojito Clásico', category: 'Cocteles', price: 20000, cost: 7000, stock: 12, icon: '🍸' },
+  { id: 'demo_6', name: 'Gin Tonic Gordons', category: 'Cocteles', price: 24000, cost: 8500, stock: 10, icon: '🍸' },
+  { id: 'demo_7', name: 'Margarita Tradicional', category: 'Cocteles', price: 22000, cost: 8000, stock: 14, icon: '🍸' },
+  { id: 'demo_8', name: 'Aguardiente Antioqueño Azul 750ml', category: 'Licores', price: 75000, cost: 42000, stock: 6, icon: '🍾' },
+  { id: 'demo_9', name: 'Ron Medellín Añejo 8 Años', category: 'Licores', price: 95000, cost: 55000, stock: 5, icon: '🍾' },
+  { id: 'demo_10', name: 'Whisky Old Parr 12 Años', category: 'Licores', price: 180000, cost: 110000, stock: 4, icon: '🥃' },
+  { id: 'demo_11', name: 'Agua Manantial con Gas 600ml', category: 'Sin alcohol', price: 3500, cost: 1500, stock: 20, icon: '🥤' },
+  { id: 'demo_12', name: 'Gaseosa Coca-Cola 400ml', category: 'Sin alcohol', price: 4000, cost: 2000, stock: 24, icon: '🥤' },
+  { id: 'demo_13', name: 'Red Bull Energy Drink', category: 'Sin alcohol', price: 12000, cost: 7000, stock: 16, icon: '⚡' },
+  { id: 'demo_14', name: 'Nachos con Queso y Guacamole', category: 'Comidas', price: 18000, cost: 7500, stock: 12, icon: '🧀' }
 ];
 globalThis.DEMO_PRODUCTS = DEMO_PRODUCTS;
 
-function initDemoDataIfNeeded() {
-  if (!isDemoMode()) return;
-  if (!Array.isArray(state.products) || state.products.length === 0) {
-    console.log('[NexoBar] 🧪 Inicializando catálogo de prueba en Modo Demo (Sandbox)...');
-    state.products = structuredClone(DEMO_PRODUCTS);
-    state.inventory = state.products.map(p => ({
-      id: 'stock-' + p.id,
-      name: p.name,
-      unit: 'und',
-      qty: Number(p.stock || 20),
-      min: 5
-    }));
-    state.products.forEach(p => { p.inventoryId = 'stock-' + p.id; });
-    state.categories = ['Todos', 'Cervezas', 'Cocteles', 'Licores', 'Sin alcohol', 'Comidas'];
-    if (state.profile) {
-      state.profile.name = 'NexoBar (Demo Sandbox)';
-    }
-    globalThis.state = state;
-    saveState();
-  }
-}
-globalThis.initDemoDataIfNeeded = initDemoDataIfNeeded;
+const DEMO_TABLES = [
+  { id: 'm1', name: 'Mesa 1', zone: 'Salón', type: 'table' },
+  { id: 'm2', name: 'Mesa 2', zone: 'Salón', type: 'table' },
+  { id: 'm3', name: 'Mesa 3', zone: 'Salón', type: 'table' },
+  { id: 'm4', name: 'Mesa 4', zone: 'Salón', type: 'table' }
+];
+globalThis.DEMO_TABLES = DEMO_TABLES;
 
-function resetDemoData() {
-  if (!isDemoMode()) return;
-  state.products = structuredClone(DEMO_PRODUCTS);
-  state.inventory = state.products.map(p => ({
+function getInitialDemoState() {
+  const products = structuredClone(DEMO_PRODUCTS);
+  const inventory = products.map(p => ({
     id: 'stock-' + p.id,
     name: p.name,
     unit: 'und',
     qty: Number(p.stock || 20),
     min: 5
   }));
-  state.products.forEach(p => { p.inventoryId = 'stock-' + p.id; });
-  state.categories = ['Todos', 'Cervezas', 'Cocteles', 'Licores', 'Sin alcohol', 'Comidas'];
-  state.orders = [];
-  state.payments = [];
-  state.purchases = [];
-  state.expenses = [];
-  state.cashShift = { status: 'closed' };
+  products.forEach(p => { p.inventoryId = 'stock-' + p.id; });
+  const demoUser = {
+    id: 'u_demo_guest',
+    name: 'Invitado Demo',
+    role: 'admin',
+    active: true,
+    mustChangePin: false,
+    salt: 'demo_salt',
+    pinHash: (typeof hashPin === 'function' ? hashPin('1234', 'demo_salt') : 'demo_hash'),
+    createdAt: Date.now()
+  };
+  return {
+    zone: 'Todas',
+    activeCategory: 'Todos',
+    search: '',
+    currentOrderId: null,
+    paymentMethod: 'Efectivo',
+    categories: ['Todos', 'Cervezas', 'Cocteles', 'Licores', 'Sin alcohol', 'Comidas'],
+    profile: {
+      name: 'NexoBar (Demo Sandbox)',
+      nit: '900.000.000-DEMO',
+      address: 'Zona de Demostración',
+      phone: '300 000 0000',
+      ownerPhone: '+57',
+      syncId: 'nexobar_demo',
+      image: null
+    },
+    cashShift: { id: 'shift_demo_init', status: 'closed', openingCash: 0 },
+    tables: structuredClone(DEMO_TABLES),
+    inventory,
+    products,
+    orders: [],
+    payments: [],
+    purchases: [],
+    expenses: [],
+    closedShifts: [],
+    users: [demoUser],
+    suppliers: [{ id: 'sup_demo_1', name: 'Distribuidora de Licores Demo', nit: '800.123.456-1', phone: '310 000 0000', notes: 'Proveedor simulado' }],
+    stockLog: [],
+    auditLog: [],
+    invoiceCounter: 0,
+    backupLog: [],
+    backupSettings: {}
+  };
+}
+globalThis.getInitialDemoState = getInitialDemoState;
+
+function initDemoDataIfNeeded() {
+  if (!isDemoMode()) return;
+  if (!Array.isArray(state.products) || state.products.length !== 14 || !Array.isArray(state.tables) || state.tables.length !== 4) {
+    console.log('[NexoBar] 🧪 Inicializando catálogo de prueba en Modo Demo (Sandbox)...');
+    resetDemoData({ silent: true });
+  }
+}
+globalThis.initDemoDataIfNeeded = initDemoDataIfNeeded;
+
+function resetDemoData({ silent = false } = {}) {
+  if (!isDemoMode()) return;
+  const initial = getInitialDemoState();
+  state = normalizeState(initial);
   globalThis.state = state;
   saveState();
-  renderAll();
-  showToast('Datos de prueba reiniciados.');
+  if (typeof renderAll === 'function') renderAll();
+  if (!silent) showToast('Datos de prueba reiniciados.');
 }
 globalThis.resetDemoData = resetDemoData;
+
+/* ---------- Reglas de Control Comercial (Modo Demo) ---------- */
+const DEMO_TX_LIMIT = 10;
+const DEMO_INACTIVITY_LIMIT_MS = 2 * 60 * 60 * 1000; // 2 horas de inactividad
+
+function getDemoTransactionCount() {
+  try {
+    return Number(sessionStorage.getItem('nexobar_demo_tx_count') || 0);
+  } catch (e) {
+    return 0;
+  }
+}
+
+function incrementDemoTransactionCount() {
+  if (!isDemoMode()) return;
+  try {
+    const next = getDemoTransactionCount() + 1;
+    sessionStorage.setItem('nexobar_demo_tx_count', String(next));
+    console.log(`[NexoBar] 🧪 Transacción demo registrada: ${next}/${DEMO_TX_LIMIT}`);
+    return next;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function isDemoLimitReached() {
+  if (!isDemoMode()) return false;
+  return getDemoTransactionCount() >= DEMO_TX_LIMIT;
+}
+
+function getNetxpremiumWhatsappUrl() {
+  const phone = (window.NETXPREMIUM_WHATSAPP || '').replace(/\D/g, '');
+  const text = encodeURIComponent('Hola Netxpremium, he probado la demo de NexoBar POS y deseo adquirir el sistema completo sin límites.');
+  return phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`;
+}
+
+function showDemoLimitModal() {
+  const dlg = document.querySelector('#demoLimitDialog');
+  if (dlg) {
+    const waBtn = dlg.querySelector('#demoWhatsappBtn');
+    if (waBtn) {
+      waBtn.href = getNetxpremiumWhatsappUrl();
+    }
+    if (typeof dlg.showModal === 'function') dlg.showModal();
+    else dlg.setAttribute('open', '');
+  }
+}
+
+function getDemoLastActivity() {
+  try {
+    return Number(localStorage.getItem('nexobar_demo_last_activity') || Date.now());
+  } catch (e) {
+    return Date.now();
+  }
+}
+
+function updateDemoActivity() {
+  if (!isDemoMode()) return;
+  try {
+    localStorage.setItem('nexobar_demo_last_activity', String(Date.now()));
+  } catch (e) {}
+}
+
+function checkDemoInactivity() {
+  if (!isDemoMode()) return;
+  const last = getDemoLastActivity();
+  const now = Date.now();
+  if (now - last >= DEMO_INACTIVITY_LIMIT_MS) {
+    console.log('[NexoBar] ⏱️ Inactividad superior a 2 horas en Modo Demo. Restaurando datos iniciales...');
+    resetDemoData({ silent: false });
+    try {
+      sessionStorage.removeItem('nexobar_demo_tx_count');
+    } catch (e) {}
+    updateDemoActivity();
+    showToast('Datos restaurados automáticamente tras 2 horas de inactividad.');
+  }
+}
+
+function initDemoInactivityWatcher() {
+  if (!isDemoMode()) return;
+  updateDemoActivity();
+  const events = ['click', 'keydown', 'scroll', 'touchstart', 'mousemove'];
+  let throttleTimer = null;
+  events.forEach(evt => {
+    window.addEventListener(evt, () => {
+      if (!throttleTimer) {
+        throttleTimer = setTimeout(() => {
+          updateDemoActivity();
+          throttleTimer = null;
+        }, 10000);
+      }
+    }, { passive: true });
+  });
+
+  setInterval(checkDemoInactivity, 60000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      checkDemoInactivity();
+    }
+  });
+}
+
+globalThis.getDemoTransactionCount = getDemoTransactionCount;
+globalThis.incrementDemoTransactionCount = incrementDemoTransactionCount;
+globalThis.isDemoLimitReached = isDemoLimitReached;
+globalThis.showDemoLimitModal = showDemoLimitModal;
+globalThis.checkDemoInactivity = checkDemoInactivity;
+globalThis.initDemoInactivityWatcher = initDemoInactivityWatcher;
 
 let reportRange='today', reportDate='';
 let purchaseDraft = [];
@@ -117,11 +262,14 @@ let pendingProductImage = null;
 let pendingBusinessImage = null;
 
 function normalizeState(saved) {
+  if (isDemoMode() && (!saved || !saved.tables || saved.tables.length !== 4 || !saved.products || saved.products.length !== 14)) {
+    saved = getInitialDemoState();
+  }
   const normalized = {
     ...structuredClone(defaultState),
     ...saved,
     categories: [...new Set([...(saved?.categories || defaultState.categories), ...((saved?.products || []).map(product => product.category).filter(Boolean))])],
-    profile: { ...defaultState.profile, ...(saved?.profile || {}), syncId: saved?.profile?.syncId || 'nexobar_default' },
+    profile: { ...defaultState.profile, ...(saved?.profile || {}), syncId: isDemoMode() ? 'nexobar_demo' : (saved?.profile?.syncId || 'nexobar_default') },
     cashShift: saved?.cashShift || { status: 'closed' },
     inventory: Array.isArray(saved?.inventory) ? structuredClone(saved.inventory) : [],
     products: Array.isArray(saved?.products) ? structuredClone(saved.products) : [],
@@ -129,6 +277,23 @@ function normalizeState(saved) {
     expenses: saved?.expenses || [],
     closedShifts: saved?.closedShifts || []
   };
+
+  if (isDemoMode()) {
+    normalized.tables = (Array.isArray(saved?.tables) && saved.tables.length === 4) ? structuredClone(saved.tables) : structuredClone(DEMO_TABLES);
+    normalized.profile.name = 'NexoBar (Demo Sandbox)';
+    normalized.users = [
+      {
+        id: 'u_demo_guest',
+        name: 'Invitado Demo',
+        role: 'admin',
+        active: true,
+        mustChangePin: false,
+        salt: 'demo_salt',
+        pinHash: (typeof hashPin === 'function' ? hashPin('1234', 'demo_salt') : 'demo_hash'),
+        createdAt: Date.now()
+      }
+    ];
+  }
 
   // Si saved traía los productos demo antiguos ("p1".."p12") sin transacciones reales, limpiarlos a cero
   const isLegacyDemo = normalized.products.length > 0 &&
@@ -480,6 +645,10 @@ function openOrder(tableId = null) {
 
   let order = activeOrderForTable(table.id);
   if (!order) {
+    if (isDemoMode() && isDemoLimitReached()) {
+      showDemoLimitModal();
+      return;
+    }
     order = {
       id: uid('ord'),
       tableId: table.id,
@@ -493,6 +662,9 @@ function openOrder(tableId = null) {
       ...actor()
     };
     state.orders.push(order);
+    if (isDemoMode()) {
+      incrementDemoTransactionCount();
+    }
     saveState();
   }
   state.currentOrderId = order.id;
@@ -550,7 +722,37 @@ function openCustomOrder(orderId) {
 globalThis.openCustomOrder = openCustomOrder;
 
 function openCustomOrderDialog() { if(!requireOpenShift())return;document.querySelector('#customOrderName').value='';document.querySelector('#customOrderDialog').showModal(); }
-function createCustomOrder() { const name=document.querySelector('#customOrderName').value.trim();if(!name)return showToast('Escribe un nombre para la cuenta.');const order={id:uid('ord'),tableId:uid('custom'),tableName:name,isCustom:true,items:[],note:'',status:'open',createdAt:Date.now(),shiftId:state.cashShift.id,sync_status:'pending',...actor()};state.orders.push(order);saveState();if(globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(()=>{});document.querySelector('#customOrderDialog').close();renderAll();openCustomOrder(order.id); }
+function createCustomOrder() {
+  if (isDemoMode() && isDemoLimitReached()) {
+    document.querySelector('#customOrderDialog')?.close();
+    showDemoLimitModal();
+    return;
+  }
+  const name = document.querySelector('#customOrderName').value.trim();
+  if (!name) return showToast('Escribe un nombre para la cuenta.');
+  const order = {
+    id: uid('ord'),
+    tableId: uid('custom'),
+    tableName: name,
+    isCustom: true,
+    items: [],
+    note: '',
+    status: 'open',
+    createdAt: Date.now(),
+    shiftId: state.cashShift?.id || null,
+    sync_status: 'pending',
+    ...actor()
+  };
+  state.orders.push(order);
+  if (isDemoMode()) {
+    incrementDemoTransactionCount();
+  }
+  saveState();
+  if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
+  document.querySelector('#customOrderDialog').close();
+  renderAll();
+  openCustomOrder(order.id);
+}
 function openTablesDialog() { renderTableManagement();document.querySelector('#newTableName').value='';document.querySelector('#newTableZone').value='Salón';document.querySelector('#tablesDialog').showModal(); }
 function renderTableManagement() { const zones=['Barra','Salón','Terraza','VIP'];document.querySelector('#tableManagementList').innerHTML=state.tables.map(table=>`<div class="table-management-row"><input data-table-name="${table.id}" type="text" value="${escapeHtml(table.name)}" /><select data-table-zone="${table.id}">${zones.map(zone=>`<option ${table.zone===zone?'selected':''}>${zone}</option>`).join('')}</select><button class="outline-button" data-save-table="${table.id}">Guardar</button><button class="remove-line" data-delete-table="${table.id}" aria-label="Eliminar mesa">×</button></div>`).join(''); }
 function saveTable(tableId) { const table=state.tables.find(item=>item.id===tableId),name=document.querySelector(`[data-table-name="${tableId}"]`)?.value.trim(),zone=document.querySelector(`[data-table-zone="${tableId}"]`)?.value;if(!table||!name)return showToast('La mesa necesita un nombre.');if(state.tables.some(item=>item.id!==tableId&&item.name.toLowerCase()===name.toLowerCase()))return showToast('Ya existe una mesa con ese nombre.');table.name=name;table.zone=zone;state.orders.forEach(order=>{if(order.tableId===tableId)order.tableName=name;});saveState();renderTableManagement();renderAll();showToast('Mesa actualizada.'); }
@@ -695,6 +897,12 @@ function renderOrderDialog() {
     paidNote.hidden = !order.paidAmount;
     paidNote.textContent = order.paidAmount ? `Ya pagado en cuentas separadas: ${money.format(order.paidAmount)}` : '';
   }
+
+  const isDemo = isDemoMode();
+  const twTop = document.querySelector('#ticketWatermarkTop');
+  const twBottom = document.querySelector('#ticketWatermarkBottom');
+  if (twTop) twTop.hidden = !isDemo;
+  if (twBottom) twBottom.hidden = !isDemo;
 }
 globalThis.renderOrderDialog = renderOrderDialog;
 globalThis.renderPOSProducts = renderOrderDialog;
@@ -764,8 +972,16 @@ function openPayment(customCheckout = null) {
 
   const dialog = document.querySelector('#paymentDialog');
   if (dialog) dialog.showModal();
+
+  const isDemo = isDemoMode();
+  const pwTop = document.querySelector('#payWatermarkTop');
+  const pwBottom = document.querySelector('#payWatermarkBottom');
+  if (pwTop) pwTop.hidden = !isDemo;
+  if (pwBottom) pwBottom.hidden = !isDemo;
+
   refreshPaymentUI();
 }
+globalThis.openPayment = openPayment;
 
 function renderPaymentOptions() {
   const container = document.querySelector('#paymentOptions');
@@ -891,6 +1107,7 @@ function addPaymentTender() {
 
   refreshPaymentUI();
 }
+globalThis.openPayment = openPayment;
 
 function removePaymentTender(index) {
   if (index >= 0 && index < currentTenders.length) {
@@ -1464,6 +1681,12 @@ function openCloseSuccessDialog(closedShift) {
       <div class="close-summary-row"><span>Estado arqueo:</span><strong>${diffLabel}</strong></div>
     </div>
   `;
+  const isDemo = isDemoMode();
+  const cswTop = document.querySelector('#closeSuccessWatermarkTop');
+  const cswBottom = document.querySelector('#closeSuccessWatermarkBottom');
+  if (cswTop) cswTop.hidden = !isDemo;
+  if (cswBottom) cswBottom.hidden = !isDemo;
+
   document.querySelector('#closeSuccessDialog')?.showModal();
 }
 
@@ -1558,6 +1781,13 @@ function printShiftZ(closedShift = null) {
   const shiftPayments = state.payments.filter(p => p.shiftId === shift.id);
   const totalSales = shift.totalSales != null ? shift.totalSales : shiftPayments.reduce((s, p) => s + p.amount, 0);
 
+  const isDemo = isDemoMode();
+  const demoWatermarkHtml = isDemo ? `
+    <div class="center bold demo-watermark" style="border:1.5px dashed #444;padding:6px;margin:8px 0;font-size:11px;letter-spacing:0.5px;background:#f3f4f6;">
+      DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM
+    </div>
+  ` : '';
+
   const printWindow = window.open('', '_blank', 'width=380,height=600');
   if (!printWindow) return window.print();
 
@@ -1575,6 +1805,7 @@ function printShiftZ(closedShift = null) {
         </style>
       </head>
       <body>
+        ${demoWatermarkHtml}
         <div class="center">
           <h2 style="margin:0">${escapeHtml(profile.name || 'NexoBar')}</h2>
           ${profile.nit ? `<div>NIT: ${escapeHtml(profile.nit)}</div>` : ''}
@@ -1597,6 +1828,7 @@ function printShiftZ(closedShift = null) {
         <div class="row bold"><span>Efectivo contado:</span><span>${money.format(shift.counted || 0)}</span></div>
         <div class="row bold"><span>Diferencia:</span><span>${shift.difference >= 0 ? '+' : ''}${money.format(shift.difference || 0)}</span></div>
         <hr>
+        ${demoWatermarkHtml}
         <div class="center" style="margin-top:15px">*** NexoBar POS ***</div>
         <script>window.onload = function() { window.print(); }<\/script>
       </body>
@@ -1604,6 +1836,7 @@ function printShiftZ(closedShift = null) {
   `);
   printWindow.document.close();
 }
+globalThis.printShiftZ = printShiftZ;
 
 function getLowAndOutOfStockItems() {
   return state.inventory.filter(i => i.qty <= i.min).map(item => {
@@ -1832,12 +2065,19 @@ async function bootstrap() {
     (!saved.products || saved.products.length === 0 || (saved.products.length <= 12 && saved.products[0]?.id === 'p1'))
   );
 
+  if (isDemoMode()) {
+    if (!saved || !Array.isArray(saved.products) || saved.products.length !== 14 || !Array.isArray(saved.tables) || saved.tables.length !== 4) {
+      saved = getInitialDemoState();
+    }
+  }
+
   state = normalizeState(saved || defaultState);
   globalThis.state = state;
   storageReady = true;
 
   if (isDemoMode()) {
-    initDemoDataIfNeeded();
+    resetDemoData({ silent: true });
+    initDemoInactivityWatcher();
   }
 
   scheduleSave();
