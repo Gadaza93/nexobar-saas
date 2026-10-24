@@ -9,10 +9,40 @@ let syncDebounceTimer = null;
 let pingTimer = null;
 let realtimeChannel = null;
 let deletedProductIds = [];
+let deletedSaleIds = [];
+
+function loadDeletedIds() {
+  try {
+    const rawProd = typeof localStorage !== "undefined" ? localStorage.getItem("nexobar_deleted_products") : null;
+    if (rawProd) deletedProductIds = JSON.parse(rawProd);
+    const rawSale = typeof localStorage !== "undefined" ? localStorage.getItem("nexobar_deleted_sales") : null;
+    if (rawSale) deletedSaleIds = JSON.parse(rawSale);
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+function saveDeletedIds() {
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("nexobar_deleted_products", JSON.stringify(deletedProductIds));
+      localStorage.setItem("nexobar_deleted_sales", JSON.stringify(deletedSaleIds));
+    }
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+loadDeletedIds();
+
+function isPendingSync(item) {
+  if (!item) return false;
+  return item.sync_status === "nuevo_local" || item.sync_status === "pending";
+}
 
 const syncState = {
   status: "offline",
-  online: typeof navigator !== "undefined" ? Boolean(navigator.onLine) : false,
+  online: (typeof navigator !== "undefined" && navigator.onLine === false) ? false : true,
   lastSyncAt: null,
   pendingCount: 0,
   lastError: null
@@ -210,27 +240,28 @@ function countPendingRecords() {
   let count = 0;
   try {
     if (Array.isArray(state.products)) {
-      count += state.products.filter(p => p.sync_status === "pending" || (!p.synced && p.sync_status !== "synced")).length;
+      count += state.products.filter(isPendingSync).length;
     }
     if (Array.isArray(state.payments)) {
-      count += state.payments.filter(p => p.sync_status === "pending" || (!p.synced && p.sync_status !== "synced")).length;
+      count += state.payments.filter(isPendingSync).length;
     }
     if (Array.isArray(state.expenses)) {
-      count += state.expenses.filter(g => g.sync_status === "pending" || (!g.synced && g.sync_status !== "synced")).length;
+      count += state.expenses.filter(isPendingSync).length;
     }
     if (Array.isArray(state.purchases)) {
-      count += state.purchases.filter(g => g.sync_status === "pending" || (!g.synced && g.sync_status !== "synced")).length;
+      count += state.purchases.filter(isPendingSync).length;
     }
     if (Array.isArray(state.suppliers)) {
-      count += state.suppliers.filter(s => s.sync_status === "pending" || (!s.synced && s.sync_status !== "synced")).length;
+      count += state.suppliers.filter(isPendingSync).length;
     }
     if (Array.isArray(state.stockLog)) {
-      count += state.stockLog.filter(l => l.sync_status === "pending" || (!l.synced && l.sync_status !== "synced")).length;
+      count += state.stockLog.filter(isPendingSync).length;
     }
-    if (state.profile?.sync_status === "pending") {
+    if (state.profile && isPendingSync(state.profile)) {
       count += 1;
     }
     count += deletedProductIds.length;
+    count += deletedSaleIds.length;
   } catch (e) {
     /* ignore */
   }
@@ -316,11 +347,68 @@ function scheduleSync(delay = 1000) {
   }, delay);
 }
 
-function trackProductDeletion(productId) {
-  if (productId && !deletedProductIds.includes(productId)) {
-    deletedProductIds.push(productId);
-    scheduleSync(500);
+async function deleteProduct(productId) {
+  if (!productId) return { ok: false, error: "ID de producto vacio" };
+  const cleanId = String(productId);
+  if (!deletedProductIds.includes(cleanId)) {
+    deletedProductIds.push(cleanId);
+    saveDeletedIds();
   }
+
+  const sb = getClient();
+  const isOff = typeof navigator !== "undefined" && navigator.onLine === false;
+  if (sb && !isOff && syncState.online !== false) {
+    try {
+      const { error: delErr } = await sb.from("productos").delete().eq("id", cleanId);
+      if (!delErr) {
+        deletedProductIds = deletedProductIds.filter(id => id !== cleanId);
+        saveDeletedIds();
+        console.log(`[NexoSync] ✅ Producto '${cleanId}' eliminado de inmediato en Supabase.`);
+        updateIndicator(syncState.status);
+        return { ok: true, id: cleanId };
+      }
+      console.warn(`[NexoSync] ⚠️ Error al eliminar producto en Supabase:`, delErr.message);
+    } catch (err) {
+      console.warn(`[NexoSync] ⚠️ Excepcion al eliminar producto en Supabase:`, err.message);
+    }
+  }
+
+  scheduleSync(500);
+  return { ok: true, queued: true, id: cleanId };
+}
+
+function trackProductDeletion(productId) {
+  deleteProduct(productId).catch(() => {});
+}
+
+async function deleteSale(saleId) {
+  if (!saleId) return { ok: false, error: "ID de venta vacio" };
+  const cleanId = String(saleId);
+  if (!deletedSaleIds.includes(cleanId)) {
+    deletedSaleIds.push(cleanId);
+    saveDeletedIds();
+  }
+
+  const sb = getClient();
+  const isOff = typeof navigator !== "undefined" && navigator.onLine === false;
+  if (sb && !isOff && syncState.online !== false) {
+    try {
+      const { error: delErr } = await sb.from("ventas").delete().eq("id", cleanId);
+      if (!delErr) {
+        deletedSaleIds = deletedSaleIds.filter(id => id !== cleanId);
+        saveDeletedIds();
+        console.log(`[NexoSync] ✅ Venta '${cleanId}' eliminada de inmediato en Supabase.`);
+        updateIndicator(syncState.status);
+        return { ok: true, id: cleanId };
+      }
+      console.warn(`[NexoSync] ⚠️ Error al eliminar venta en Supabase:`, delErr.message);
+    } catch (err) {
+      console.warn(`[NexoSync] ⚠️ Excepcion al eliminar venta en Supabase:`, err.message);
+    }
+  }
+
+  scheduleSync(500);
+  return { ok: true, queued: true, id: cleanId };
 }
 
 // Sincronización dedicada de productos e inventario con Supabase
@@ -332,8 +420,24 @@ async function syncProductos(options = {}) {
   }
   const bId = getBusinessId();
   try {
+    // 1. Replicar eliminaciones de productos pendientes hacia Supabase primero
+    if (deletedProductIds.length > 0) {
+      try {
+        const idsToDelete = [...deletedProductIds];
+        const { error: delErr } = await sb.from("productos").delete().in("id", idsToDelete);
+        if (!delErr) {
+          deletedProductIds = deletedProductIds.filter(id => !idsToDelete.includes(id));
+          saveDeletedIds();
+          console.log(`[NexoSync] ✅ Eliminaciones de productos procesadas: ${idsToDelete.length} en Supabase.`);
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
+    // 2. Filtrar únicamente productos locales marcados como nuevo_local o pending
     const rawProds = (typeof state !== "undefined" && Array.isArray(state.products)) ? state.products : [];
-    const prods = rawProds.filter(p => options.force || p.sync_status === "pending" || !p.sync_status);
+    const prods = rawProds.filter(p => options.force || isPendingSync(p));
     if (prods.length > 0) {
       const records = prods.map(p => sanitizeProducto(p, bId));
       const { error: prodErr } = await sb.from("productos").upsert(records, { onConflict: "id" });
@@ -343,17 +447,6 @@ async function syncProductos(options = {}) {
       }
       prods.forEach(p => { p.sync_status = "synced"; });
       console.log(`[NexoSync] ✅ Productos: ${records.length} sincronizados.`);
-
-      // Replicar eliminaciones de productos si existen
-      if (deletedProductIds.length > 0) {
-        try {
-          const { error: delErr } = await sb.from("productos").delete().in("id", deletedProductIds);
-          if (!delErr) deletedProductIds = [];
-        } catch (e) {
-          /* ignore */
-        }
-      }
-
       return { ok: true, count: records.length };
     }
     console.log("[NexoSync] ℹ️ Productos: 0 pendientes.");
@@ -610,26 +703,24 @@ async function syncSales(options = {}) {
   }
   const bId = getBusinessId();
   try {
-    const rawSales = (typeof state !== "undefined" && Array.isArray(state.payments)) ? state.payments : [];
-
-    // Consultar IDs de ventas existentes en Supabase para contrastar
-    let remoteSaleIds = new Set();
-    try {
-      const { data: idRows, error: idErr } = await sb.from("ventas").select("id").eq("business_id", bId);
-      if (!idErr && Array.isArray(idRows)) {
-        idRows.forEach(r => { if (r.id) remoteSaleIds.add(String(r.id)); });
+    // 1. Replicar eliminaciones de ventas pendientes hacia Supabase primero
+    if (deletedSaleIds.length > 0) {
+      try {
+        const idsToDelete = [...deletedSaleIds];
+        const { error: delErr } = await sb.from("ventas").delete().in("id", idsToDelete);
+        if (!delErr) {
+          deletedSaleIds = deletedSaleIds.filter(id => !idsToDelete.includes(id));
+          saveDeletedIds();
+          console.log(`[NexoSync] ✅ Eliminaciones de ventas procesadas: ${idsToDelete.length} en Supabase.`);
+        }
+      } catch (e) {
+        /* ignore */
       }
-    } catch (e) {
-      /* ignore */
     }
 
-    // Tomar ventas que no tengan synced: true o cuyo id no exista aún en Supabase
-    const sales = rawSales.filter(p => {
-      if (options.force) return true;
-      if (!p.synced || p.sync_status !== "synced") return true;
-      if (remoteSaleIds.size > 0 && !remoteSaleIds.has(String(p.id))) return true;
-      return false;
-    });
+    // 2. Tomar únicamente ventas locales marcadas como nuevo_local o pending
+    const rawSales = (typeof state !== "undefined" && Array.isArray(state.payments)) ? state.payments : [];
+    const sales = rawSales.filter(p => options.force || isPendingSync(p));
 
     if (sales.length > 0) {
       console.log(`[NexoSync] 📤 Subiendo ${sales.length} ventas locales hacia Supabase...`);
@@ -764,7 +855,7 @@ async function syncAll(options = {}) {
     const expensesList = (typeof state !== "undefined" && Array.isArray(state.expenses)) ? state.expenses : [];
     const purchasesList = (typeof state !== "undefined" && Array.isArray(state.purchases)) ? state.purchases : [];
     const rawExpenses = [...expensesList, ...purchasesList];
-    const pendingExpenses = rawExpenses.filter(g => options.force || g.sync_status === "pending" || !g.sync_status);
+    const pendingExpenses = rawExpenses.filter(g => options.force || isPendingSync(g));
     if (pendingExpenses.length > 0) {
       const records = pendingExpenses.map(g => sanitizeGasto(g, bId));
       const { error: gastoErr } = await sb.from("gastos").upsert(records, { onConflict: "id" });
@@ -788,7 +879,7 @@ async function syncAll(options = {}) {
   // --- 5. PROVEEDORES ---
   try {
     const rawSups = (typeof state !== "undefined" && Array.isArray(state.suppliers)) ? state.suppliers : [];
-    const sups = rawSups.filter(s => options.force || s.sync_status === "pending" || !s.sync_status);
+    const sups = rawSups.filter(s => options.force || isPendingSync(s));
     if (sups.length > 0) {
       const records = sups.map(s => sanitizeProveedor(s, bId));
       const { error: supErr } = await sb.from("proveedores").upsert(records, { onConflict: "id" });
@@ -813,7 +904,7 @@ async function syncAll(options = {}) {
   try {
     const stockLogs = (typeof state !== "undefined" && Array.isArray(state.stockLog)) ? state.stockLog : [];
     const rawMermas = stockLogs.filter(l => l.delta && String(l.delta).startsWith("-"));
-    const pendingMermas = rawMermas.filter(l => options.force || l.sync_status === "pending" || !l.sync_status);
+    const pendingMermas = rawMermas.filter(l => options.force || isPendingSync(l));
     if (pendingMermas.length > 0) {
       const records = pendingMermas.map(l => sanitizeMerma(l, bId));
       const { error: mermaErr } = await sb.from("mermas").upsert(records, { onConflict: "id" });
@@ -954,24 +1045,33 @@ async function pullAllFromSupabase(businessId) {
     // 2. Productos
     try {
       const { data: prodData, error: prodErr } = await sb.from("productos").select("*").eq("business_id", bId);
-      if (!prodErr && Array.isArray(prodData) && prodData.length > 0) {
+      if (!prodErr && Array.isArray(prodData)) {
         if (typeof state !== "undefined" && state) {
           if (!Array.isArray(state.products)) state.products = [];
           if (!Array.isArray(state.inventory)) state.inventory = [];
           if (!Array.isArray(state.categories)) state.categories = [];
 
-          // Detectar si la base local tiene únicamente productos demo sin transacciones
-          const isVirginDemo = state.products.length > 0 &&
-            state.products.every(p => p.id && String(p.id).startsWith("p") && 4 > String(p.id).length) &&
+          // Limpiar productos demo antiguos si existen
+          const isLegacyDemo = state.products.length > 0 &&
+            state.products.every(p => p.id && String(p.id).startsWith("p") && 5 > String(p.id).length) &&
             (!state.payments || state.payments.length === 0) &&
             (!state.purchases || state.purchases.length === 0);
 
-          if (isVirginDemo) {
+          if (isLegacyDemo) {
             state.products = [];
             state.inventory = [];
           }
 
+          // Eliminar localmente los productos que fueron borrados en Supabase (si no estan pendientes de subida)
+          const remoteProdIds = new Set(prodData.map(p => String(p.id)));
+          state.products = state.products.filter(p => isPendingSync(p) || remoteProdIds.has(String(p.id)));
+          const validInvIds = new Set(state.products.map(p => p.inventoryId).filter(Boolean));
+          state.inventory = state.inventory.filter(i => validInvIds.has(i.id));
+
           prodData.forEach(p => {
+            if (deletedProductIds.includes(String(p.id))) {
+              return; // Ignorar producto eliminado localmente
+            }
             const currentStock = Number(p.stock ?? 0);
             const invId = `stock-${p.id}`;
             const existingProd = state.products.find(x => x.id === p.id);
@@ -1035,10 +1135,18 @@ async function pullAllFromSupabase(businessId) {
     // 3. Ventas
     try {
       const { data: salesData, error: salesErr } = await sb.from("ventas").select("*").eq("business_id", bId);
-      if (!salesErr && Array.isArray(salesData) && salesData.length > 0) {
+      if (!salesErr && Array.isArray(salesData)) {
         if (typeof state !== "undefined" && state) {
           if (!Array.isArray(state.payments)) state.payments = [];
+
+          // Eliminar localmente las ventas que fueron borradas en Supabase (si no estan pendientes)
+          const remoteSaleIds = new Set(salesData.map(v => String(v.id)));
+          state.payments = state.payments.filter(p => isPendingSync(p) || remoteSaleIds.has(String(p.id)));
+
           salesData.forEach(v => {
+            if (deletedSaleIds.includes(String(v.id))) {
+              return; // Ignorar venta eliminada localmente
+            }
             const existingSale = state.payments.find(p => p.id === v.id);
             if (existingSale) {
               existingSale.sync_status = "synced";
@@ -1605,6 +1713,8 @@ rootScope.NexoSync = {
   toIsoDate,
   toValidISOString,
   trackProductDeletion,
+  deleteProduct,
+  deleteSale,
   getBusinessId,
   getStatus: () => ({ ...syncState }),
   getPendingCount: countPendingRecords,

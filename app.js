@@ -10,32 +10,14 @@ const defaultState = {
     { id: 'm1', name: 'Mesa 1', zone: 'Salón' }, { id: 'm2', name: 'Mesa 2', zone: 'Salón' }, { id: 'm3', name: 'Mesa 3', zone: 'Salón' }, { id: 'm4', name: 'Mesa 4', zone: 'Salón' },
     { id: 't1', name: 'Terraza 1', zone: 'Terraza' }, { id: 't2', name: 'Terraza 2', zone: 'Terraza' }, { id: 't3', name: 'Terraza 3', zone: 'Terraza' }, { id: 'l1', name: 'Lounge', zone: 'VIP' },
   ],
-  products: [
-    { id: 'p1', name: 'Cerveza Club Colombia', category: 'Cervezas', price: 9000, icon: '🍺', recipe: { cerveza: 1 } },
-    { id: 'p2', name: 'Cerveza Corona', category: 'Cervezas', price: 13000, icon: '🍺', recipe: { cerveza: 1 } },
-    { id: 'p3', name: 'Michelada', category: 'Cervezas', price: 15000, icon: '🍺', recipe: { cerveza: 1, limon: 1 } },
-    { id: 'p4', name: 'Mojito clásico', category: 'Cocteles', price: 24000, icon: '🍸', recipe: { ron: .06, limon: 1, hierbabuena: 1 } },
-    { id: 'p5', name: 'Gin tonic', category: 'Cocteles', price: 28000, icon: '🍸', recipe: { gin: .06, tonica: 1, limon: 1 } },
-    { id: 'p6', name: 'Cuba libre', category: 'Cocteles', price: 21000, icon: '🍹', recipe: { ron: .06, cola: 1, limon: 1 } },
-    { id: 'p7', name: 'Aguardiente (media)', category: 'Licores', price: 35000, icon: '🥃', recipe: { aguardiente: .375 } },
-    { id: 'p8', name: 'Whisky (trago)', category: 'Licores', price: 22000, icon: '🥃', recipe: { whisky: .05 } },
-    { id: 'p9', name: 'Agua con gas', category: 'Sin alcohol', price: 6000, icon: '💧', recipe: { agua: 1 } },
-    { id: 'p10', name: 'Gaseosa', category: 'Sin alcohol', price: 7000, icon: '🥤', recipe: { cola: 1 } },
-    { id: 'p11', name: 'Papas bravas', category: 'Comidas', price: 18000, icon: '🍟', recipe: { papas: 1 } },
-    { id: 'p12', name: 'Alitas BBQ', category: 'Comidas', price: 29000, icon: '🍗', recipe: { alitas: 1 } },
-  ],
-  inventory: [
-    { id: 'cerveza', name: 'Cerveza botella', unit: 'und', qty: 46, min: 18 }, { id: 'ron', name: 'Ron', unit: 'L', qty: 3.2, min: 1.2 },
-    { id: 'gin', name: 'Gin', unit: 'L', qty: .9, min: 1 }, { id: 'whisky', name: 'Whisky', unit: 'L', qty: 1.6, min: 1 },
-    { id: 'aguardiente', name: 'Aguardiente', unit: 'L', qty: 2.1, min: 1 }, { id: 'tonica', name: 'Agua tónica', unit: 'und', qty: 14, min: 8 },
-    { id: 'cola', name: 'Gaseosa cola', unit: 'und', qty: 20, min: 12 }, { id: 'agua', name: 'Agua con gas', unit: 'und', qty: 17, min: 10 },
-    { id: 'limon', name: 'Limón', unit: 'und', qty: 28, min: 20 }, { id: 'hierbabuena', name: 'Hierbabuena', unit: 'atado', qty: 3, min: 2 },
-    { id: 'papas', name: 'Papas porción', unit: 'und', qty: 13, min: 9 }, { id: 'alitas', name: 'Alitas porción', unit: 'und', qty: 7, min: 8 },
-  ],
+  products: [],
+  inventory: [],
   orders: [], payments: [], purchases: [], expenses: [], closedShifts: [],
   users: [], suppliers: [], stockLog: [], auditLog: [], invoiceCounter: 0, backupLog: [], backupSettings: {}
 };
 let state = normalizeState(defaultState); // provisional: bootstrap() carga los datos guardados
+globalThis.state = state;
+globalThis.defaultState = defaultState;
 let reportRange='today', reportDate='';
 let purchaseDraft = [];
 let editingProductId = null;
@@ -46,15 +28,26 @@ function normalizeState(saved) {
   const normalized = {
     ...structuredClone(defaultState),
     ...saved,
-    categories: [...new Set([...(saved?.categories || defaultState.categories), ...(saved?.products || defaultState.products).map(product => product.category).filter(Boolean)])],
+    categories: [...new Set([...(saved?.categories || defaultState.categories), ...((saved?.products || []).map(product => product.category).filter(Boolean))])],
     profile: { ...defaultState.profile, ...(saved?.profile || {}), syncId: saved?.profile?.syncId || 'nexobar_default' },
     cashShift: saved?.cashShift || { status: 'closed' },
-    inventory: structuredClone(saved?.inventory || defaultState.inventory),
-    products: structuredClone(saved?.products || defaultState.products),
+    inventory: Array.isArray(saved?.inventory) ? structuredClone(saved.inventory) : [],
+    products: Array.isArray(saved?.products) ? structuredClone(saved.products) : [],
     purchases: saved?.purchases || [],
     expenses: saved?.expenses || [],
     closedShifts: saved?.closedShifts || []
   };
+
+  // Si saved traía los productos demo antiguos ("p1".."p12") sin transacciones reales, limpiarlos a cero
+  const isLegacyDemo = normalized.products.length > 0 &&
+    normalized.products.every(p => p.id && String(p.id).startsWith('p') && String(p.id).length < 5) &&
+    (!normalized.payments || normalized.payments.length === 0) &&
+    (!normalized.purchases || normalized.purchases.length === 0);
+
+  if (isLegacyDemo) {
+    normalized.products = [];
+    normalized.inventory = [];
+  }
 
   if (!normalized.products || normalized.products.length === 0) {
     normalized.products = [];
@@ -102,12 +95,14 @@ function normalizeState(saved) {
   ensureExtras(normalized);
   return normalized;
 }
+globalThis.normalizeState = normalizeState;
 function saveState() {
   scheduleSave();
   if (globalThis.NexoSync?.scheduleSync) {
     globalThis.NexoSync.scheduleSync();
   }
 }
+globalThis.saveState = saveState;
 function localISO(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function today() { return localISO(new Date()); }
 function displayDate() { return new Intl.DateTimeFormat('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date()).replace(/^./, c => c.toUpperCase()); }
@@ -171,6 +166,10 @@ function renderInventory() {
   const lows = state.inventory.filter(i => i.qty <= i.min && i.qty > 0);
   const outOfStock = state.inventory.filter(i => i.qty <= 0);
   document.querySelector('#inventorySummary').innerHTML = `<div class="summary-item"><span>Productos en stock</span><strong>${state.inventory.length}</strong></div><div class="summary-item ${lows.length?'warning':''}"><span>Bajo stock</span><strong>${lows.length}</strong></div><div class="summary-item ${outOfStock.length?'danger':''}"><span>Agotados</span><strong>${outOfStock.length}</strong></div><div class="summary-item"><span>Última actualización</span><strong>Ahora</strong></div>`;
+  if (!state.inventory || state.inventory.length === 0) {
+    document.querySelector('#inventoryTable').innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;padding:32px 16px;font-size:14px;">No hay productos ni existencias registradas.</td></tr>';
+    return;
+  }
   document.querySelector('#inventoryTable').innerHTML = state.inventory.map(item => {
     let badge = '';
     if (item.qty <= 0) {
@@ -196,7 +195,7 @@ function saveTable(tableId) { const table=state.tables.find(item=>item.id===tabl
 function addTable() { const name=document.querySelector('#newTableName').value.trim(),zone=document.querySelector('#newTableZone').value;if(!name)return showToast('Escribe el nombre de la mesa.');if(state.tables.some(table=>table.name.toLowerCase()===name.toLowerCase()))return showToast('Ya existe una mesa con ese nombre.');state.tables.push({id:uid('table'),name,zone});saveState();renderTableManagement();renderAll();showToast('Mesa creada.'); }
 function deleteTable(tableId) { const table=state.tables.find(item=>item.id===tableId);if(!table)return;if(activeOrderForTable(tableId))return showToast('Cobra o elimina el pedido activo antes de eliminar esta mesa.');if(!window.confirm(`¿Eliminar ${table.name}?`))return;state.tables=state.tables.filter(item=>item.id!==tableId);saveState();renderTableManagement();renderAll();showToast('Mesa eliminada.'); }
 function productVisual(product) { return product.image ? `<img src="${product.image}" alt="${escapeHtml(product.name)}" />` : escapeHtml(product.icon || '🍾'); }
-function renderOrderDialog() { const order = getOrder(state.currentOrderId); if (!order) return; const categories = ['Todos',...new Set(state.products.map(p=>p.category))]; document.querySelector('#categoryTabs').innerHTML = categories.map(cat => `<button class="category-button ${state.activeCategory===cat?'active':''}" data-category="${cat}">${escapeHtml(cat)}</button>`).join(''); const search = state.search.toLowerCase(); const products = state.products.filter(p => (state.activeCategory === 'Todos' || p.category === state.activeCategory) && p.name.toLowerCase().includes(search)); document.querySelector('#productGrid').innerHTML = products.map(p=>`<button class="product" data-product="${p.id}"><span class="product-icon">${productVisual(p)}</span><strong>${escapeHtml(p.name)}</strong><span>${money.format(p.price)}</span></button>`).join('') || '<p class="muted">No encontramos ese producto.</p>'; document.querySelector('#ticketItems').innerHTML = order.items.length ? order.items.map(item => `<div class="ticket-item"><strong>${escapeHtml(item.name)}</strong><span class="item-price">${money.format(item.price*item.qty)}</span><div class="quantity-control"><button data-item-change="${item.productId}" data-delta="-1">−</button><span>${item.qty}</span><button data-item-change="${item.productId}" data-delta="1">+</button></div></div>`).join('') : '<p class="empty-ticket">Agrega productos para iniciar el pedido.</p>'; document.querySelector('#orderTotal').textContent = money.format(orderTotal(order)); document.querySelector('#deleteOrderButton').style.visibility = order.items.length ? 'visible':'hidden'; const paidNote=document.querySelector('#paidNote'); paidNote.hidden=!order.paidAmount; paidNote.textContent=order.paidAmount?`Ya pagado en cuentas separadas: ${money.format(order.paidAmount)}`:''; }
+function renderOrderDialog() { const order = getOrder(state.currentOrderId); if (!order) return; const categories = ['Todos',...new Set(state.products.map(p=>p.category))]; document.querySelector('#categoryTabs').innerHTML = categories.map(cat => `<button class="category-button ${state.activeCategory===cat?'active':''}" data-category="${cat}">${escapeHtml(cat)}</button>`).join(''); const search = state.search.toLowerCase(); const products = state.products.filter(p => (state.activeCategory === 'Todos' || p.category === state.activeCategory) && p.name.toLowerCase().includes(search)); const emptyMsg = state.products.length === 0 ? '<p class="muted" style="text-align:center;padding:24px 12px;grid-column:1/-1;">No hay productos registrados. Crea uno nuevo o importa tu archivo Excel.</p>' : '<p class="muted">No encontramos ese producto.</p>'; document.querySelector('#productGrid').innerHTML = products.map(p=>`<button class="product" data-product="${p.id}"><span class="product-icon">${productVisual(p)}</span><strong>${escapeHtml(p.name)}</strong><span>${money.format(p.price)}</span></button>`).join('') || emptyMsg; document.querySelector('#ticketItems').innerHTML = order.items.length ? order.items.map(item => `<div class="ticket-item"><strong>${escapeHtml(item.name)}</strong><span class="item-price">${money.format(item.price*item.qty)}</span><div class="quantity-control"><button data-item-change="${item.productId}" data-delta="-1">−</button><span>${item.qty}</span><button data-item-change="${item.productId}" data-delta="1">+</button></div></div>`).join('') : '<p class="empty-ticket">Agrega productos para iniciar el pedido.</p>'; document.querySelector('#orderTotal').textContent = money.format(orderTotal(order)); document.querySelector('#deleteOrderButton').style.visibility = order.items.length ? 'visible':'hidden'; const paidNote=document.querySelector('#paidNote'); paidNote.hidden=!order.paidAmount; paidNote.textContent=order.paidAmount?`Ya pagado en cuentas separadas: ${money.format(order.paidAmount)}`:''; }
 function addProduct(productId) { const order=getOrder(state.currentOrderId), product=state.products.find(p=>p.id===productId); if(!order||!product)return; const found=order.items.find(i=>i.productId===productId); if(found)found.qty++; else order.items.push({productId:product.id,name:product.name,price:product.price,cost:Number(product.cost || 0),category:product.category,qty:1,inventoryId:product.inventoryId,recipe:product.recipe}); saveState(); renderOrderDialog(); }
 function changeItem(productId, delta) { const order=getOrder(state.currentOrderId); const item=order?.items.find(i=>i.productId===productId); if(!item)return; item.qty+=Number(delta); if(item.qty<=0)order.items=order.items.filter(i=>i!==item); saveState(); renderOrderDialog(); }
 function saveOrder() { const order=getOrder(state.currentOrderId); if(!order)return; order.note=document.querySelector('#orderNote').value.trim(); if(!order.items.length){state.orders=state.orders.filter(o=>o.id!==order.id);saveState();document.querySelector('#orderDialog').close();state.currentOrderId=null;renderAll();return showToast('Pedido vacío descartado.');} saveState();document.querySelector('#orderDialog').close();state.currentOrderId=null;renderAll();showToast('Pedido guardado. Queda abierto hasta cobrarlo.'); }
@@ -779,7 +778,8 @@ function chargeSelectedSplitItems() {
 function openInventoryDialog(itemId=null) { const select=document.querySelector('#inventorySelect'); select.innerHTML=state.inventory.map(i=>`<option value="${i.id}">${i.name} (${formatQty(i.qty)} ${i.unit})</option>`).join(''); if(itemId)select.value=itemId; document.querySelector('#inventoryAmount').value='';document.querySelector('#inventoryReason').value='';document.querySelector('#inventoryDialog').showModal(); }
 function openProductDialog(productId=null) { editingProductId=productId;const product=productId && state.products.find(item=>item.id===productId), stock=product && state.inventory.find(item=>item.id===product.inventoryId);pendingProductImage=product?.image || null;document.querySelector('#productName').value=product?.name || '';document.querySelector('#productCategory').value=product?.category || '';document.querySelector('#productCost').value=product?.cost ?? '';document.querySelector('#productPrice').value=product?.price ?? '';document.querySelector('#productStock').value=stock?.qty ?? '';document.querySelector('#productMinStock').value=stock?.min ?? 5;document.querySelector('#productUnit').value=stock?.unit || 'und';document.querySelector('#productImage').value='';setImagePreview(document.querySelector('#productImagePreview'),pendingProductImage,product?.icon || '🍾');document.querySelector('#productDialog h2').textContent=product ? 'Editar producto' : 'Nuevo producto';document.querySelector('#saveProductButton').textContent=product ? 'Guardar cambios' : 'Crear producto e inventario';document.querySelector('#productDialog').showModal(); }
 function saveProduct() { const name=document.querySelector('#productName').value.trim(), category=document.querySelector('#productCategory').value.trim() || 'Otros'; const costRaw=document.querySelector('#productCost').value, priceRaw=document.querySelector('#productPrice').value, stockRaw=document.querySelector('#productStock').value, minRaw=document.querySelector('#productMinStock').value; const cost=Number(costRaw), price=Number(priceRaw), stock=Number(stockRaw || 0), min=minRaw==='' ? 5 : Number(minRaw || 0), unit=document.querySelector('#productUnit').value; if(!name || costRaw==='' || priceRaw==='' || cost<0 || price<=0 || stock<0 || min<0) return showToast('Completa nombre, costo, precio de venta y existencias válidas.');if(!state.categories.includes(category))state.categories.push(category);let product=editingProductId && state.products.find(item=>item.id===editingProductId);if(product){const supply=state.inventory.find(item=>item.id===product.inventoryId);product.name=name;product.category=category;product.cost=cost;product.price=price;product.image=pendingProductImage;product.sync_status='pending';if(supply){supply.name=name;supply.unit=unit;supply.qty=stock;supply.min=min;}else{const inventoryId=uid('inv');state.inventory.push({id:inventoryId,name,unit,qty:stock,min});product.inventoryId=inventoryId;product.recipe={[inventoryId]:1};}}else{const inventoryId=uid('inv'), productId=uid('prod');state.inventory.push({id:inventoryId,name,unit,qty:stock,min});state.products.push({id:productId,name,category,cost,price,icon:'🍾',image:pendingProductImage,inventoryId,recipe:{[inventoryId]:1},sync_status:'pending'});}saveState();document.querySelector('#productDialog').close();renderAll();showToast(product ? 'Producto actualizado.' : 'Producto creado con su stock inicial.'); }
-function deleteProduct(productId) { const product=state.products.find(item=>item.id===productId);if(!product)return;if(!window.confirm(`¿Eliminar ${product.name}? Esta acción no borra facturas ni ventas históricas.`))return;if(globalThis.NexoSync?.trackProductDeletion)globalThis.NexoSync.trackProductDeletion(productId);const targetInventoryId=product.inventoryId || `stock-${productId}`;state.products=state.products.filter(item=>item.id!==productId);if(state.products.length===0){state.inventory=[];}else{const validInventoryIds=new Set(state.products.map(p=>p.inventoryId).filter(Boolean));state.inventory=state.inventory.filter(item=>item.id!==targetInventoryId&&item.id!==product.inventoryId&&item.id!==`stock-${productId}`&&item.id!==productId&&validInventoryIds.has(item.id));}saveState();renderAll();showToast('Producto eliminado del catálogo.'); }
+function deleteProduct(productId) { const product=state.products.find(item=>item.id===productId);if(!product)return;if(!window.confirm(`¿Eliminar ${product.name}? Esta acción no borra facturas ni ventas históricas.`))return;if(globalThis.NexoSync?.deleteProduct){globalThis.NexoSync.deleteProduct(productId);}else if(globalThis.NexoSync?.trackProductDeletion){globalThis.NexoSync.trackProductDeletion(productId);}const targetInventoryId=product.inventoryId || `stock-${productId}`;state.products=state.products.filter(item=>item.id!==productId);if(state.products.length===0){state.inventory=[];}else{const validInventoryIds=new Set(state.products.map(p=>p.inventoryId).filter(Boolean));state.inventory=state.inventory.filter(item=>item.id!==targetInventoryId&&item.id!==product.inventoryId&&item.id!==`stock-${productId}`&&item.id!==productId&&validInventoryIds.has(item.id));}saveState();renderAll();showToast('Producto eliminado del catálogo.'); }
+globalThis.deleteProduct = deleteProduct;
 function openCategoriesDialog() { renderCategoryList();document.querySelector('#newCategoryName').value='';document.querySelector('#categoriesDialog').showModal(); }
 function renderCategoryList() { document.querySelector('#categoryList').innerHTML=state.categories.map((category,index)=>`<div class="category-row"><input id="categoryName-${index}" type="text" value="${escapeHtml(category)}" /><button class="outline-button" data-save-category="${index}">Guardar</button><button class="remove-line" data-delete-category="${index}" aria-label="Eliminar categoría">×</button></div>`).join(''); }
 function addCategory() { const category=document.querySelector('#newCategoryName').value.trim();if(!category)return showToast('Escribe un nombre de categoría.');if(state.categories.some(item=>item.toLowerCase()===category.toLowerCase()))return showToast('Esa categoría ya existe.');state.categories.push(category);saveState();document.querySelector('#newCategoryName').value='';renderCategoryList();renderCategoryOptions();showToast('Categoría creada.'); }
@@ -1248,16 +1248,20 @@ async function bootstrap() {
     document.body.insertAdjacentHTML('afterbegin', `<div class="fatal-error"><strong>La app tuvo un error al iniciar.</strong> Tus datos están a salvo; descarga un respaldo y avísanos. (${escapeHtml(String(error.message || error))})</div>`);
   }
 }
-bootstrap();
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && !globalThis.__IS_NODE_TEST__) {
+  bootstrap();
+}
 
 const BILLS=[2000,5000,10000,20000,50000,100000], COINS=[50,100,200,500,1000];
 function cashCounterRow(value,kind) { return `<label class="denom-row"><span class="denom-label">${money.format(value)}</span><input type="number" min="0" step="1" inputmode="numeric" placeholder="0" data-denom="${value}" data-kind="${kind}" aria-label="Cantidad de ${kind} de ${money.format(value)}" /><b class="denom-sub" data-denom-sub="${value}">$0</b></label>`; }
-function renderCashCounter() { document.querySelector('#cashCounter').innerHTML=`<div class="denom-group"><h4>Billetes</h4>${BILLS.map(v=>cashCounterRow(v,'billetes')).join('')}</div><div class="denom-group"><h4>Monedas</h4>${COINS.map(v=>cashCounterRow(v,'monedas')).join('')}</div>`; }
+function renderCashCounter() { const el=document.querySelector('#cashCounter'); if(!el)return; el.innerHTML=`<div class="denom-group"><h4>Billetes</h4>${BILLS.map(v=>cashCounterRow(v,'billetes')).join('')}</div><div class="denom-group"><h4>Monedas</h4>${COINS.map(v=>cashCounterRow(v,'monedas')).join('')}</div>`; }
 function cashCounts() { const counts={}; document.querySelectorAll('#cashCounter input[data-denom]').forEach(input=>{const qty=Math.max(0,Math.floor(Number(input.value||0)));if(qty)counts[input.dataset.denom]=qty;}); return counts; }
 function updateCashCounter() { let total=0; document.querySelectorAll('#cashCounter input[data-denom]').forEach(input=>{const value=Number(input.dataset.denom),qty=Math.max(0,Math.floor(Number(input.value||0))),sub=value*qty;total+=sub;document.querySelector(`[data-denom-sub="${value}"]`).textContent=money.format(sub);}); document.querySelector('#countedCash').value=total; checkCashDifference(); }
 function resetCashCounter() { renderCashCounter(); }
-renderCashCounter();
-document.querySelector('#cashCounter').addEventListener('input',updateCashCounter);
+if (!globalThis.__IS_NODE_TEST__) {
+  renderCashCounter();
+  document.querySelector('#cashCounter')?.addEventListener('input',updateCashCounter);
+}
 document.querySelector('#cashCounter').addEventListener('focusin',e=>{if(e.target.matches('input'))e.target.select();});
 
 /* Reportes por período */

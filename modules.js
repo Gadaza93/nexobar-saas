@@ -26,6 +26,8 @@ function fmtDateTime(ts) { return new Date(ts).toLocaleString('es-CO', { day: '2
 
 function cyrb53(str, seed = 0) { let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed; for (let i = 0, ch; i < str.length; i++) { ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); } h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909); h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909); return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36); }
 function hashPin(pin, salt) { return cyrb53(`${salt}:${pin}`); }
+function uid(prefix = 'id') { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
+globalThis.uid = globalThis.uid || uid;
 function newUser(name, role, pin) { const salt = Math.random().toString(36).slice(2, 10); return { id: uid('usr'), name, role, salt, pinHash: hashPin(pin, salt), active: true, createdAt: Date.now() }; }
 function setUserPin(user, pin) { user.salt = Math.random().toString(36).slice(2, 10); user.pinHash = hashPin(pin, user.salt); }
 globalThis.cyrb53 = cyrb53;
@@ -55,6 +57,7 @@ function ensureExtras(s) {
   [...(s.payments || [])].filter(p => !p.invoiceNo).sort((a, b) => paymentTimestamp(a) - paymentTimestamp(b)).forEach(p => { counter++; p.invoiceNo = `FAC-${String(counter).padStart(5, '0')}`; });
   s.invoiceCounter = counter;
 }
+globalThis.ensureExtras = ensureExtras;
 function nextInvoiceNo() { state.invoiceCounter = Number(state.invoiceCounter || 0) + 1; return `FAC-${String(state.invoiceCounter).padStart(5, '0')}`; }
 function afterStateReplaced() { if (!me()) showLogin(); }
 
@@ -296,6 +299,9 @@ function confirmDeleteInvoice() {
   const reason = document.querySelector('#invoiceDeleteReason').value.trim(); if (reason.length < 3) return showToast('Escribe el motivo para eliminar la factura.');
   const restore = document.querySelector('#invoiceRestoreStock').checked;
   if (restore) (payment.items || []).forEach(item => adjustSoldStock(item, -item.qty));
+  if (globalThis.NexoSync?.deleteSale) {
+    globalThis.NexoSync.deleteSale(payment.id);
+  }
   state.payments = state.payments.filter(p => p.id !== payment.id);
   logAudit('Factura eliminada', `${payment.invoiceNo} · ${payment.customer || 'Venta mostrador'} · ${money.format(payment.amount)} · ${payment.method}${restore ? ' · inventario devuelto' : ''}`, { reason, data: structuredClone(payment) });
   saveState(); invoiceToDelete = null; document.querySelector('#invoiceDeleteDialog').close(); renderAll(); showToast(`${payment.invoiceNo} eliminada.`);
@@ -337,12 +343,18 @@ function deleteSupplier(id) {
 
 /* Productos: costo promedio ponderado (ya no solo el último costo). */
 function renderProducts() {
-  document.querySelector('#productsTable').innerHTML = state.products.map(product => {
+  const tbody = document.querySelector('#productsTable');
+  if (!state.products || state.products.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="muted" style="text-align:center;padding:36px 16px;font-size:14px;">No hay productos registrados. Crea uno nuevo o importa tu archivo Excel.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = state.products.map(product => {
     const stock = state.inventory.find(item => item.id === product.inventoryId), cost = Number(product.cost || 0), profit = Number(product.price || 0) - cost, margin = cost ? profit / cost * 100 : 0;
     const last = product.lastCost !== undefined && Math.round(product.lastCost) !== Math.round(cost) ? `<br><small class="muted">Última compra ${money.format(product.lastCost)}</small>` : '';
     return `<tr><td><strong>${escapeHtml(product.name)}</strong></td><td>${escapeHtml(product.category || 'Sin categoría')}</td><td>${money.format(cost)}${last}</td><td><strong>${money.format(product.price)}</strong></td><td><strong>${money.format(profit)}</strong></td><td>${cost ? `${margin.toFixed(1)}%` : '<span class="muted">—</span>'}</td><td>${stock ? `${formatQty(stock.qty)} ${stock.unit}` : '<span class="muted">Sin stock</span>'}</td><td><div class="product-actions"><button class="mini-action" data-edit-product="${product.id}">Editar</button><button class="mini-action delete-action" data-delete-product="${product.id}">Eliminar</button></div></td></tr>`;
   }).join('');
 }
+globalThis.renderProducts = renderProducts;
 function savePurchase() {
   if (!requireOpenShift()) return;
   const supplierName = document.querySelector('#purchaseSupplier').value.trim(), invoice = document.querySelector('#purchaseInvoice').value.trim(), date = document.querySelector('#purchaseDate').value, method = document.querySelector('#purchaseMethod').value;

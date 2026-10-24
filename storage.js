@@ -6,6 +6,7 @@
 
 const DB_NAME = 'brasa-pos', DB_STORE = 'kv', DB_KEY = 'state', LEGACY_KEY = 'brasa-pos-v1';
 const BACKUP_DEFAULTS = { onClose: true, daily: true, lastAt: null, lastReason: '', lastFile: '', lastWhere: '' };
+globalThis.BACKUP_DEFAULTS = BACKUP_DEFAULTS;
 let storageReady = false, storageMode = 'indexeddb', storageDb = null;
 let saveTimer = null, mirrorTimer = null, saveChain = Promise.resolve(), lastSaveErrorToast = 0, storageInfoAt = 0;
 const storageStatus = { lastSavedAt: null, error: null, migrated: false, restoredFromFile: false };
@@ -119,3 +120,14 @@ function renderBackupCard(forceInfo = false) {
   document.querySelector('#backupLog').innerHTML = [...(state.backupLog || [])].reverse().slice(0, 5).map(e => `<div class="report-row"><span>${fmtDateTime(e.at)} · ${escapeHtml(e.reason)}</span><b>${e.ok ? `${Math.max(1, Math.round(e.bytes / 1024))} KB` : 'Error'}</b></div>`).join('') || '<p class="muted">Sin historial todavía.</p>';
   refreshStorageInfo(forceInfo);
 }
+
+globalThis.storageInit = storageInit;
+globalThis.scheduleSave = scheduleSave;
+globalThis.persistNow = persistNow;
+globalThis.flushAll = flushAll;
+globalThis.runBackup = runBackup;
+globalThis.checkDailyBackup = checkDailyBackup;
+globalThis.startBackupSchedule = startBackupSchedule;
+globalThis.refreshStorageInfo = refreshStorageInfo;
+globalThis.renderBackupCard = renderBackupCard;
+globalThis.backupSettings = backupSettings;
