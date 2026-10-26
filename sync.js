@@ -698,48 +698,6 @@ async function syncOrders(options = {}) {
       /* ignore si la tabla opcional pedidos_activos no existe */
     }
 
-    // 3. Soporte para tabla opcional 'pedidos' si existe en Supabase
-    try {
-      if (currentOrders.length > 0) {
-        const orderRows = currentOrders.map(o => ({
-          id: String(o.id),
-          business_id: String(bId || DEFAULT_BUSINESS_ID),
-          table_id: String(o.tableId || "walkin"),
-          table_name: String(o.tableName || "Barra"),
-          items: Array.isArray(o.items) ? o.items : [],
-          total: Number(o.items?.reduce((s, i) => s + (Number(i.price || 0) * Number(i.qty || 1)), 0) || 0),
-          estado: String(o.status || "open"),
-          nota: String(o.note || ""),
-          created_at: toIsoDate(o.createdAt || Date.now()),
-          updated_at: new Date().toISOString()
-        }));
-        await sb.from("pedidos").upsert(orderRows, { onConflict: "id" });
-      }
-    } catch (e) {
-      /* ignore si la tabla opcional pedidos no existe */
-    }
-
-    // 4. Soporte para tabla opcional 'ordenes_activas' si existe en Supabase
-    try {
-      const activeRows = currentOrders.filter(o => o && o.status !== "paid").map(o => ({
-        id: String(o.id),
-        business_id: String(bId || DEFAULT_BUSINESS_ID),
-        table_id: String(o.tableId || "walkin"),
-        table_name: String(o.tableName || "Barra"),
-        items: Array.isArray(o.items) ? o.items : [],
-        total: Number(o.items?.reduce((s, i) => s + (Number(i.price || 0) * Number(i.qty || 1)), 0) || 0),
-        estado: String(o.status || "open"),
-        nota: String(o.note || ""),
-        created_at: toIsoDate(o.createdAt || Date.now()),
-        updated_at: new Date().toISOString()
-      }));
-      if (activeRows.length > 0) {
-        await sb.from("ordenes_activas").upsert(activeRows, { onConflict: "id" });
-      }
-    } catch (e) {
-      /* ignore si la tabla opcional ordenes_activas no existe */
-    }
-
     return { ok: true, count: currentOrders.length };
   } catch (err) {
     console.warn("[NexoSync] ⚠️ syncOrders excepcion:", err.message);
@@ -850,7 +808,7 @@ function mergeRemoteOrders(remoteOrders) {
   });
 }
 
-// Sincronización del estado de apertura / cierre de caja con Supabase (negocios, turnos_caja, cajas)
+// Sincronización del estado de apertura / cierre de caja con Supabase (negocios, turnos_caja)
 async function syncCashShift(shift, closedData = null) {
   const currentShift = shift || ((typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" });
   if (isDemoMode()) {
@@ -921,26 +879,6 @@ async function syncCashShift(shift, closedData = null) {
       }
     } catch (e) {
       /* ignore si la tabla opcional turnos_caja no existe */
-    }
-
-    // 3. Soporte para tabla 'cajas' con columnas business_id, estado, monto_apertura, fecha_apertura
-    try {
-      const cajaRecord = {
-        id: String(currentShift.id || `caja_${Date.now()}`),
-        business_id: String(bId || DEFAULT_BUSINESS_ID),
-        estado: String(currentShift.status || "closed"),
-        monto_apertura: Number(currentShift.openingCash ?? 0),
-        fecha_apertura: toIsoDate(currentShift.openedAt || Date.now()),
-        fecha_cierre: currentShift.closedAt ? toIsoDate(currentShift.closedAt) : null,
-        created_at: toIsoDate(currentShift.openedAt || Date.now()),
-        updated_at: new Date().toISOString()
-      };
-      const { error: cErr } = await sb.from("cajas").upsert(cajaRecord, { onConflict: "id" });
-      if (!cErr) {
-        console.log("[NexoSync] ✅ Turno de caja registrado en tabla 'cajas'.");
-      }
-    } catch (e) {
-      /* ignore si la tabla opcional cajas no existe */
     }
 
     return { ok: true, status: currentShift.status };
@@ -1451,50 +1389,6 @@ async function pullAllFromSupabase(businessId) {
         }
       } catch (e) {
         /* ignore si no existe tabla pedidos_activos */
-      }
-
-      // Consulta de respaldo complementaria a tabla cajas (si existiera)
-      try {
-        const { data: cajaRows, error: cErr } = await sb.from("cajas").select("*").eq("business_id", bId).order("updated_at", { ascending: false }).limit(1);
-        if (!cErr && Array.isArray(cajaRows) && cajaRows.length > 0) {
-          const latestCaja = cajaRows[0];
-          if (latestCaja && typeof state !== "undefined" && state) {
-            state.cashShift = {
-              id: latestCaja.id,
-              status: latestCaja.estado || latestCaja.status || "closed",
-              openingCash: Number(latestCaja.monto_apertura ?? latestCaja.opening_cash ?? 0),
-              openedAt: new Date(latestCaja.fecha_apertura || latestCaja.opened_at || Date.now()).getTime(),
-              closedAt: (latestCaja.fecha_cierre || latestCaja.closed_at) ? new Date(latestCaja.fecha_cierre || latestCaja.closed_at).getTime() : null,
-              date: (latestCaja.fecha_apertura || latestCaja.opened_at || new Date().toISOString()).slice(0, 10)
-            };
-            if (typeof renderShiftStatus === "function") {
-              try { renderShiftStatus(); } catch (e) { /* ignore */ }
-            }
-          }
-        }
-      } catch (e) {
-        /* ignore si la tabla opcional cajas no existe */
-      }
-
-      // Consulta complementaria a tabla pedidos (si existiera)
-      try {
-        const { data: pedidoRows, error: pErr } = await sb.from("pedidos").select("*").eq("business_id", bId);
-        if (!pErr && Array.isArray(pedidoRows) && pedidoRows.length > 0) {
-          const mappedOrders = pedidoRows.map(row => ({
-            id: String(row.id),
-            tableId: row.table_id || "walkin",
-            tableName: row.table_name || "Mesa",
-            items: Array.isArray(row.items) ? row.items : [],
-            note: row.nota || "",
-            status: row.estado || "open",
-            createdAt: new Date(row.created_at || Date.now()).getTime(),
-            updatedAt: new Date(row.updated_at || Date.now()).getTime()
-          }));
-          mergeRemoteOrders(mappedOrders);
-          results.pedidos = Math.max(Number(results.pedidos || 0), mappedOrders.length);
-        }
-      } catch (e) {
-        /* ignore si no existe tabla pedidos */
       }
     } catch (e) {
       console.warn("[NexoSync] Error descargando negocio:", e.message);
@@ -2020,67 +1914,6 @@ function setupRealtime() {
           if (typeof renderStats === "function") try { renderStats(); } catch (e) {}
           if (typeof renderCustomOrders === "function") try { renderCustomOrders(); } catch (e) {}
           if (typeof renderAll === "function") try { renderAll(); } catch (e) {}
-        }
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "cajas", filter: `business_id=eq.${bId}` }, payload => {
-        if (payload?.new) {
-          const row = payload.new;
-          if (typeof state !== "undefined" && state) {
-            state.cashShift = {
-              id: row.id,
-              status: row.estado || row.status || "closed",
-              openingCash: Number(row.monto_apertura ?? row.opening_cash ?? 0),
-              openedAt: new Date(row.fecha_apertura || row.opened_at || Date.now()).getTime(),
-              closedAt: (row.fecha_cierre || row.closed_at) ? new Date(row.fecha_cierre || row.closed_at).getTime() : null,
-              date: (row.fecha_apertura || row.opened_at || new Date().toISOString()).slice(0, 10)
-            };
-            if (typeof scheduleSave === "function") scheduleSave();
-            if (typeof renderShiftStatus === "function") renderShiftStatus();
-            if (typeof renderStats === "function") renderStats();
-            if (typeof renderAll === "function") renderAll();
-          }
-        }
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "pedidos", filter: `business_id=eq.${bId}` }, payload => {
-        if (payload?.new) {
-          const row = payload.new;
-          if (typeof state !== "undefined" && state) {
-            mergeRemoteOrders([{
-              id: String(row.id),
-              tableId: row.table_id || "walkin",
-              tableName: row.table_name || "Mesa",
-              items: Array.isArray(row.items) ? row.items : [],
-              note: row.nota || "",
-              status: row.estado || "open",
-              createdAt: new Date(row.created_at || Date.now()).getTime(),
-              updatedAt: new Date(row.updated_at || Date.now()).getTime()
-            }]);
-            if (typeof scheduleSave === "function") scheduleSave();
-            if (typeof renderTables === "function") try { renderTables(); } catch (e) {}
-            if (typeof renderStats === "function") try { renderStats(); } catch (e) {}
-            if (typeof renderAll === "function") try { renderAll(); } catch (e) {}
-          }
-        }
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "ordenes_activas", filter: `business_id=eq.${bId}` }, payload => {
-        if (payload?.new) {
-          const row = payload.new;
-          if (typeof state !== "undefined" && state) {
-            mergeRemoteOrders([{
-              id: String(row.id),
-              tableId: row.table_id || "walkin",
-              tableName: row.table_name || "Mesa",
-              items: Array.isArray(row.items) ? row.items : [],
-              note: row.nota || "",
-              status: row.estado || "open",
-              createdAt: new Date(row.created_at || Date.now()).getTime(),
-              updatedAt: new Date(row.updated_at || Date.now()).getTime()
-            }]);
-            if (typeof scheduleSave === "function") scheduleSave();
-            if (typeof renderTables === "function") try { renderTables(); } catch (e) {}
-            if (typeof renderStats === "function") try { renderStats(); } catch (e) {}
-            if (typeof renderAll === "function") try { renderAll(); } catch (e) {}
-          }
         }
       })
       .subscribe();

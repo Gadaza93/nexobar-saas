@@ -61,25 +61,10 @@ const TABLES = {
     sample: () => ({ id: crypto.randomUUID(), business_id: AUDIT_BID, usuario_id: null, monto_apertura: 0, monto_cierre: null, total_efectivo: 0, total_ventas: 0, diferencia: 0, estado: "abierto", fecha_apertura: now, fecha_cierre: null, created_at: now }),
     patch: { estado: "cerrado", fecha_cierre: now }
   },
-  cajas: {
-    required: false,
-    cols: ["id", "business_id", "estado", "monto_apertura", "fecha_apertura", "fecha_cierre", "created_at", "updated_at"],
-    sample: () => ({ id: `audit_caja_${Date.now()}`, business_id: AUDIT_BID, estado: "open", monto_apertura: 0, fecha_apertura: now, fecha_cierre: null, created_at: now, updated_at: now })
-  },
   pedidos_activos: {
     required: false,
     cols: ["id", "business_id", "mesa_id", "nombre_mesa", "cliente", "items", "subtotal", "total", "estado", "tipo", "created_at", "updated_at"],
     sample: () => ({ id: crypto.randomUUID(), business_id: AUDIT_BID, mesa_id: "walkin", nombre_mesa: "Venta en barra", cliente: "", items: [{ name: "Prueba", qty: 1, price: 1000 }], subtotal: 1000, total: 1000, estado: "abierto", tipo: "barra", created_at: now, updated_at: now })
-  },
-  pedidos: {
-    required: false,
-    cols: ["id", "business_id", "table_id", "table_name", "items", "total", "estado", "nota", "created_at", "updated_at"],
-    sample: () => ({ id: `audit_ped_${Date.now()}`, business_id: AUDIT_BID, table_id: "walkin", table_name: "Barra", items: [], total: 0, estado: "open", nota: "", created_at: now, updated_at: now })
-  },
-  ordenes_activas: {
-    required: false,
-    cols: ["id", "business_id", "table_id", "table_name", "items", "total", "estado", "nota", "created_at", "updated_at"],
-    sample: () => ({ id: `audit_ord_${Date.now()}`, business_id: AUDIT_BID, table_id: "walkin", table_name: "Barra", items: [], total: 0, estado: "open", nota: "", created_at: now, updated_at: now })
   }
 };
 
