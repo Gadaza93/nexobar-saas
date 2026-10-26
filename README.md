@@ -59,7 +59,7 @@ Los datos son locales a un navegador/dispositivo. Una operación real con varios
 
 ## App de escritorio para Windows (instalador)
 
-La carpeta incluye un proyecto de Electron que empaqueta la app como programa instalable. Guarda los datos en el disco del PC (IndexedDB + archivo espejo `brasa-pos.json` en `%APPDATA%\Brasa POS\datos`) y escribe los respaldos en una carpeta normal.
+La carpeta incluye un proyecto de Electron que empaqueta la app como programa instalable. Guarda los datos en el disco del PC (IndexedDB + archivo espejo `nexobar-pos.json` en `%APPDATA%\NexoBar\datos`) y escribe los respaldos en una carpeta normal.
 
 **Crear el instalador (una sola vez, en un PC con Windows e internet):**
 1. Instala Node.js LTS desde https://nodejs.org

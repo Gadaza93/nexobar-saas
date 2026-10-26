@@ -21,6 +21,7 @@ let flushed = false;
 const userDir = () => app.getPath('userData');
 const configFile = () => path.join(userDir(), 'config.json');
 const mirrorFile = () => path.join(userDir(), 'datos', 'nexobar-pos.json');
+const legacyMirrorFile = () => path.join(userDir(), 'datos', 'brasa-pos.json'); // instalaciones anteriores al cambio de nombre
 const BACKUP_PATTERN = /^(nexobar|brasa)-pos-respaldo-.*\.json$/;
 const KEEP_BACKUPS = 120;
 
@@ -65,11 +66,14 @@ function pruneBackups(dir) {
 
 // Canales de comunicación segura (IPC)
 ipcMain.handle('mirror:load', () => {
-  try {
-    return fs.readFileSync(mirrorFile(), 'utf8');
-  } catch {
-    return null;
+  for (const file of [mirrorFile(), legacyMirrorFile()]) {
+    try {
+      return fs.readFileSync(file, 'utf8');
+    } catch {
+      /* no existe: probar el siguiente */
+    }
   }
+  return null;
 });
 
 ipcMain.handle('mirror:save', (_event, json) => {

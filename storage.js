@@ -4,29 +4,8 @@
    - En la app de Windows (Electron) además guarda un archivo espejo en disco y respalda a una carpeta.
    Se carga ANTES de modules.js y app.js: solo declaraciones, el arranque lo hace bootstrap() en app.js. */
 
-function isDemoMode() {
-  if (typeof globalThis !== 'undefined' && typeof globalThis.__FORCE_DEMO_MODE__ === 'boolean') {
-    return globalThis.__FORCE_DEMO_MODE__;
-  }
-  try {
-    if (typeof window !== 'undefined' && window.location) {
-      const search = window.location.search || '';
-      if (search.includes('demo=true')) return true;
-      if (search.includes('demo=false') || search.includes('prod=true')) return false;
-      const isDesktop = Boolean(
-        (window.desktop && window.desktop.isDesktop) ||
-        (typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.includes('Electron')) ||
-        window.location.protocol === 'file:'
-      );
-      if (isDesktop) return false;
-      const hostname = window.location.hostname || '';
-      const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
-      return !isLocalhost;
-    }
-  } catch (e) {}
-  return false;
-}
-globalThis.isDemoMode = isDemoMode;
+// isDemoMode() vive en demo-mode.js (cargado antes en index.html); en Node (pruebas) se carga aquí.
+if (typeof module !== 'undefined' && typeof globalThis.isDemoMode !== 'function') require('./demo-mode.js');
 
 function getDbName() {
   return isDemoMode() ? 'nexobar_demo_db' : 'brasa-pos';

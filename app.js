@@ -20,31 +20,6 @@ let state = structuredClone(defaultState); // provisional: bootstrap() carga los
 globalThis.state = state;
 globalThis.defaultState = defaultState;
 
-function isDemoMode() {
-  if (typeof globalThis.NexoSync?.isDemoMode === 'function') {
-    return globalThis.NexoSync.isDemoMode();
-  }
-  try {
-    if (typeof window !== 'undefined' && window.location) {
-      const search = window.location.search || '';
-      const params = new URLSearchParams(search);
-      if (params.get('demo') === 'true') return true;
-      if (params.get('demo') === 'false' || params.get('prod') === 'true') return false;
-      const isDesktop = Boolean(
-        (window.desktop && window.desktop.isDesktop) ||
-        (typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.includes('Electron')) ||
-        window.location.protocol === 'file:'
-      );
-      if (isDesktop) return false;
-      const hostname = window.location.hostname || '';
-      const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
-      return !isLocalhost;
-    }
-  } catch (e) {}
-  return false;
-}
-globalThis.isDemoMode = isDemoMode;
-
 const DEMO_PRODUCTS = [
   { id: 'demo_1', name: 'Cerveza Corona Extra 355ml', category: 'Cervezas', price: 9000, cost: 4800, stock: 18, icon: '🍺' },
   { id: 'demo_2', name: 'Cerveza Club Colombia Dorada', category: 'Cervezas', price: 7000, cost: 3500, stock: 24, icon: '🍺' },
@@ -2078,6 +2053,9 @@ async function bootstrap() {
   if (isDemoMode()) {
     resetDemoData({ silent: true });
     initDemoInactivityWatcher();
+  } else {
+    // Restos de una sesión demo anterior: no deciden el modo, pero no deben quedar en producción
+    try { localStorage.removeItem('nexobar_demo_last_activity'); sessionStorage.removeItem('nexobar_demo_tx_count'); } catch { /* sin permiso */ }
   }
 
   scheduleSave();

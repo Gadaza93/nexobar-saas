@@ -12,7 +12,8 @@ if (!gotLock) app.quit();
 let win = null, flushed = false;
 const userDir = () => app.getPath('userData');
 const configFile = () => path.join(userDir(), 'config.json');
-const mirrorFile = () => path.join(userDir(), 'datos', 'brasa-pos.json');
+const mirrorFile = () => path.join(userDir(), 'datos', 'nexobar-pos.json');
+const legacyMirrorFile = () => path.join(userDir(), 'datos', 'brasa-pos.json'); // instalaciones anteriores al cambio de nombre
 const BACKUP_PATTERN = /^(nexobar|brasa)-pos-respaldo-.*\.json$/, KEEP_BACKUPS = 120;
 
 function readConfig() { try { return JSON.parse(fs.readFileSync(configFile(), 'utf8')); } catch { return {}; } }
@@ -24,7 +25,10 @@ function pruneBackups(dir) {
   files.slice(KEEP_BACKUPS).forEach(name => { try { fs.unlinkSync(path.join(dir, name)); } catch { /* en uso */ } });
 }
 
-ipcMain.handle('mirror:load', () => { try { return fs.readFileSync(mirrorFile(), 'utf8'); } catch { return null; } });
+ipcMain.handle('mirror:load', () => {
+  for (const file of [mirrorFile(), legacyMirrorFile()]) { try { return fs.readFileSync(file, 'utf8'); } catch { /* no existe */ } }
+  return null;
+});
 ipcMain.handle('mirror:save', (_event, json) => {
   try {
     const file = mirrorFile();

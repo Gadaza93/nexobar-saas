@@ -110,12 +110,17 @@ const NexoSync = global.NexoSync || global.window?.NexoSync || globalThis.NexoSy
 async function runDemoTests() {
   console.log("\n1. Probando lógica de detección de Modo Demo vs Producción...");
 
-  // Caso 1.A: En Netlify (web pública) sin desktop -> Debe ser Demo
+  // Caso 1.A: En Netlify (web pública) sin ?demo=true -> Producción real
   global.window.desktop = null;
   global.window.location.hostname = 'nexobar-pos.netlify.app';
   global.window.location.search = '';
-  assert.strictEqual(NexoSync.isDemoMode(), true, "Debe ser true en netlify.app");
-  console.log("   ✅ Detecta web pública (netlify.app) como Modo Demo.");
+  assert.strictEqual(NexoSync.isDemoMode(), false, "La URL normal de netlify.app debe abrir producción");
+  console.log("   ✅ La URL normal de Netlify abre el POS en producción.");
+
+  // Caso 1.A2: Netlify con ?demo=true -> Demo
+  global.window.location.search = '?demo=true';
+  assert.strictEqual(NexoSync.isDemoMode(), true, "Debe ser true en netlify.app con ?demo=true");
+  console.log("   ✅ Netlify con ?demo=true activa el Modo Demo.");
 
   // Caso 1.B: Con parámetro ?demo=true en cualquier host -> Debe ser Demo
   global.window.location.hostname = 'localhost';

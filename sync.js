@@ -40,34 +40,8 @@ function isPendingSync(item) {
   return item.sync_status === "nuevo_local" || item.sync_status === "pending";
 }
 
-// Detección de Modo Demo Local (Sandbox) para proteger la base de datos de producción
-function isDemoMode() {
-  try {
-    if (typeof window !== "undefined" && window.location) {
-      const search = window.location.search || "";
-      const params = new URLSearchParams(search);
-      if (params.get("demo") === "true") return true;
-      if (params.get("demo") === "false" || params.get("prod") === "true") return false;
-
-      const isDesktop = Boolean(
-        (window.desktop && window.desktop.isDesktop) ||
-        (typeof navigator !== "undefined" && navigator.userAgent && navigator.userAgent.includes("Electron")) ||
-        window.location.protocol === "file:"
-      );
-      if (isDesktop) return false;
-
-      const hostname = window.location.hostname || "";
-      const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "";
-      if (!isLocalhost) {
-        return true;
-      }
-    }
-  } catch (e) {
-    /* ignore */
-  }
-  return false;
-}
-globalThis.isDemoMode = isDemoMode;
+// Modo Demo Local (Sandbox): isDemoMode() vive en demo-mode.js; en Node (pruebas) se carga aquí.
+if (typeof module !== "undefined" && typeof globalThis.isDemoMode !== "function") require("./demo-mode.js");
 
 const syncState = {
   status: "offline",
@@ -152,6 +126,32 @@ function getBusinessId() {
     /* ignore */
   }
   return DEFAULT_BUSINESS_ID;
+}
+
+// Si el CDN de Supabase no cargó (arranque en frío sin internet), se reintenta cuando vuelva la conexión.
+const SUPABASE_CDN = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+let supabaseLibLoading = null;
+
+function hasSupabaseLib() {
+  const sb = (typeof window !== "undefined" && window.supabase) || (typeof globalThis !== "undefined" && globalThis.supabase);
+  return Boolean(sb && typeof sb.createClient === "function");
+}
+
+function loadSupabaseLib() {
+  if (hasSupabaseLib()) return Promise.resolve(true);
+  if (typeof document === "undefined" || typeof document.createElement !== "function" || !document.head) return Promise.resolve(false);
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return Promise.resolve(false);
+  if (!supabaseLibLoading) {
+    supabaseLibLoading = new Promise(resolve => {
+      const script = document.createElement("script");
+      script.src = SUPABASE_CDN;
+      script.async = true;
+      script.onload = () => resolve(hasSupabaseLib());
+      script.onerror = () => { script.remove(); resolve(false); };
+      document.head.appendChild(script);
+    }).then(ok => { supabaseLibLoading = null; return ok; });
+  }
+  return supabaseLibLoading;
 }
 
 function getClient() {
@@ -391,6 +391,7 @@ async function checkInitialConnection() {
     updateIndicator("demo");
     return true;
   }
+  if (!hasSupabaseLib()) await loadSupabaseLib();
   const sb = getClient();
   if (!sb) {
     updateIndicator("offline");
@@ -2275,9 +2276,8 @@ if (typeof document !== "undefined") {
 // Exportación global en window y globalThis
 const rootScope = typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : this);
 rootScope.NexoSync = {
-  isDemoMode,
+  isDemoMode: () => globalThis.isDemoMode(),
   getClient,
-  isDemoMode,
   init,
   syncAll,
   syncData,

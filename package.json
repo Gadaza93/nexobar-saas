@@ -28,6 +28,7 @@
       "electron/**",
       "index.html",
       "app.js",
+      "demo-mode.js",
       "storage.js",
       "modules.js",
       "sync.js",

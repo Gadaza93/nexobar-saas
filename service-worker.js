@@ -1,13 +1,16 @@
-const CACHE = 'nexobar-pos-v11';
+const CACHE = 'nexobar-pos-v12';
 const ASSETS = [
   './',
   './index.html',
   './theme.css',
   './styles.css',
   './design.css',
+  './xlsx.full.min.js',
+  './demo-mode.js',
   './storage.js',
   './modules.js',
   './sync.js',
+  './import-products.js',
   './app.js',
   './manifest.webmanifest',
   './logo.png'
