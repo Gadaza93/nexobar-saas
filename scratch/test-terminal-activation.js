@@ -108,9 +108,11 @@ const NexoSync = require('../sync.js');
   await NexoSync.pullAllFromSupabase('bar_900123');
   assert.deepStrictEqual(globalThis.state.subscription.active, false);
   assert.ok(enforced >= 1);
-  negociosRow = { ...negociosRow, activo: true };
+  negociosRow = { ...negociosRow, activo: true, plan: 'pro', fecha_vencimiento: '2026-11-25T20:12:35+00:00' };
   await NexoSync.pullAllFromSupabase('bar_900123');
   assert.strictEqual(globalThis.state.subscription.active, true);
+  assert.strictEqual(globalThis.state.subscription.plan, 'pro');
+  assert.strictEqual(globalThis.state.subscription.expiresAt, '2026-11-25T20:12:35+00:00');
   NexoSync.applySubscriptionStatus(undefined); // columna ausente: no cambia nada
   assert.strictEqual(globalThis.state.subscription.active, true);
   delete globalThis.enforceSubscription; delete globalThis.state;
@@ -150,6 +152,21 @@ const NexoSync = require('../sync.js');
   assert.strictEqual(ctx.saves, 1);
   assert.strictEqual(ctx.ensureTerminalLinked(false), true);
   console.log('   ✅ linkTerminal guarda el negocio en el estado y fija profile.syncId.');
+
+  // --- 3. Licencia en Mi negocio y aviso preventivo (subscriptionInfo, extraída de app.js) ---
+  const subBlock = src.slice(src.indexOf('const SUBSCRIPTION_WARN_DAYS'), src.indexOf('function renderSubscription'));
+  const subCtx = { Intl, Date, Math, Number, Boolean }; vm.createContext(subCtx); vm.runInContext(subBlock, subCtx);
+  const now = Date.parse('2026-11-22T12:00:00-05:00'), day = 86400000;
+  let info = subCtx.subscriptionInfo({ active: true, plan: 'pro', expiresAt: '2026-11-25T12:00:00-05:00' }, now);
+  assert.strictEqual(info.plan, 'Plan Pro');
+  assert.strictEqual(info.expiryLabel, '25 de noviembre de 2026');
+  assert.strictEqual(info.banner.text, 'Tu suscripción vence en 3 días. Comunícate con soporte para renovar tu servicio.');
+  assert.strictEqual(info.banner.urgent, false);
+  assert.strictEqual(subCtx.subscriptionInfo({ active: true, expiresAt: new Date(now + day).toISOString() }, now).banner.text.startsWith('Tu suscripción vence en 1 día.'), true);
+  assert.strictEqual(subCtx.subscriptionInfo({ active: true, expiresAt: new Date(now + 4 * day).toISOString() }, now).banner, null);
+  assert.strictEqual(subCtx.subscriptionInfo({ active: false, expiresAt: new Date(now + day).toISOString() }, now).banner, null);
+  assert.strictEqual(subCtx.subscriptionInfo(null, now).known, false);
+  console.log('   ✅ Licencia: «Plan Pro», «25 de noviembre de 2026» y aviso solo si está activa y faltan ≤ 3 días.');
 
   console.log('\n=== TODAS LAS PRUEBAS DE ACTIVACIÓN PASARON ===');
   process.exit(0);

@@ -224,15 +224,23 @@ async function signOutTerminal() {
   try { await sb.auth.signOut({ scope: "local" }); } catch (err) { /* sin conexión: el token se descarta igual */ }
 }
 
-// Estado de la suscripción leído de negocios.activo. Se guarda en el estado para que el bloqueo
-// se mantenga aunque la caja reinicie sin internet; solo una descarga con activo=true lo levanta.
-function applySubscriptionStatus(activo) {
-  if (typeof activo !== "boolean" || typeof state === "undefined" || !state) return;
-  const changed = state.subscription?.active !== activo;
-  state.subscription = { active: activo, checkedAt: Date.now() };
-  if (changed && typeof scheduleSave === "function") scheduleSave();
+// Licencia leída de la fila de negocios (activo, plan, fecha_vencimiento). Se guarda en el estado para
+// que el bloqueo y los avisos sigan aunque la caja reinicie sin internet; solo una descarga la actualiza.
+// Las columnas ausentes no cambian lo guardado.
+function applySubscriptionStatus(negocio) {
+  if (!negocio || typeof negocio !== "object" || typeof state === "undefined" || !state) return;
+  const prev = state.subscription || {}, next = { ...prev };
+  if (typeof negocio.activo === "boolean") next.active = negocio.activo;
+  if (typeof negocio.plan === "string") next.plan = negocio.plan;
+  if ("fecha_vencimiento" in negocio) next.expiresAt = negocio.fecha_vencimiento || null;
+  if (next.active === prev.active && next.plan === prev.plan && next.expiresAt === prev.expiresAt) return;
+  state.subscription = { ...next, checkedAt: Date.now() };
+  if (typeof scheduleSave === "function") scheduleSave();
   if (typeof enforceSubscription === "function") {
     try { enforceSubscription(); } catch (e) { /* ignore */ }
+  }
+  if (typeof renderSubscription === "function") {
+    try { renderSubscription(); } catch (e) { /* ignore */ }
   }
 }
 
@@ -1368,7 +1376,7 @@ async function pullAllFromSupabase(businessId) {
     try {
       const { data: negData, error: negErr } = await sb.from("negocios").select("*").eq("id", bId).maybeSingle();
       if (!negErr && negData) {
-        applySubscriptionStatus(negData.activo);
+        applySubscriptionStatus(negData);
         if (typeof state !== "undefined" && state) {
           state.profile = {
             ...state.profile,

@@ -55,6 +55,7 @@
         </header>
 
         <section id="pos" class="view active-view">
+          <div class="subscription-banner" data-subscription-banner role="status" hidden></div>
           <div class="stats-grid">
             <article class="stat-card" data-perm="charge"><span>Ventas hoy</span><strong id="salesToday">$0</strong><small id="salesCount">0 cuentas cerradas</small></article>
             <article class="stat-card"><span>Mesas activas</span><strong id="activeTables">0</strong><small id="activeItems">0 bebidas y platos</small></article>
@@ -121,10 +122,24 @@
 
         <section id="profile" class="view">
           <div class="section-heading"><div><h2>Mi negocio</h2><p>Datos de tu establecimiento para comprobantes, comandas y facturas impresas.</p></div></div>
+          <div class="subscription-banner" data-subscription-banner role="status" hidden></div>
+          <div class="profile-grid">
+          <div class="profile-col">
           <div class="profile-layout">
             <article class="data-card profile-card"><div id="profileImagePreview" class="profile-image-preview">N</div><label class="outline-button file-button">Cambiar logo del ticket<input id="businessImage" type="file" accept="image/*" hidden /></label><p class="muted center">Logotipo exclusivo para comprobantes y facturas impresas.</p></article>
             <article class="data-card profile-form"><label class="field-label" for="businessName">Nombre del establecimiento</label><input id="businessName" type="text" placeholder="Ej. NexoBar" /><label class="field-label" for="businessNit">NIT / RUT</label><input id="businessNit" type="text" placeholder="Ej. 900.000.000-1" /><label class="field-label" for="businessAddress">Dirección</label><input id="businessAddress" type="text" placeholder="Ej. Carrera 00 # 00-00" /><div class="two-fields"><div><label class="field-label" for="businessPhone">Número celular del local</label><input id="businessPhone" type="tel" placeholder="Ej. 300 000 0000" /></div><div><label class="field-label" for="businessOwnerPhone">Teléfono del Administrador / Dueño (WhatsApp)</label><input id="businessOwnerPhone" type="tel" placeholder="Ej. +57 300 123 4567" /></div></div><label class="field-label" for="businessSyncId">Identificador de sincronización en la nube (ID de Negocio)</label><input id="businessSyncId" type="text" placeholder="nexobar_default" /><button id="saveProfileButton" class="primary-button">Guardar información</button></article>
           </div>
+          <article class="data-card subscription-card" id="subscriptionCard">
+            <h3>Licencia NexoBar</h3>
+            <div class="subscription-grid">
+              <div><span class="field-label">Estado</span><strong id="subscriptionStatus" class="subscription-badge">—</strong></div>
+              <div><span class="field-label">Plan actual</span><strong id="subscriptionPlan">—</strong></div>
+              <div><span class="field-label">Fecha de vencimiento</span><strong id="subscriptionExpiry">—</strong></div>
+            </div>
+            <p id="subscriptionNote" class="muted subscription-note"></p>
+          </article>
+          </div>
+          <div class="profile-col">
           <article class="data-card backup-card" id="cloudSyncCard">
             <h3>Sincronización en la nube (Supabase)</h3>
             <p class="muted">Conecta tu negocio en la nube para usar NexoBar desde múltiples dispositivos (computador, celular, tablet o acceso web). Puedes descargar todos tus datos existentes o forzar la subida de cambios.</p>
@@ -138,7 +153,7 @@
             <h3>Turno y Estado de Caja</h3>
             <p class="muted">Si la caja presenta un saldo desfasado por turnos anteriores no cerrados o inconsistentes, puedes reiniciar el turno y restablecer el saldo esperado a $0 tanto localmente como en la nube.</p>
             <div class="backup-actions">
-              <button id="resetShiftConfigButton" class="remove-line" style="padding:10px 16px;font-size:13px;border-radius:8px;" type="button">⚠️ Forzar cierre de turno y reiniciar saldo a $0</button>
+              <button id="resetShiftConfigButton" class="danger-outline-button" type="button">⚠️ Forzar cierre de turno y reiniciar saldo a $0</button>
             </div>
           </article>
           <article class="data-card backup-card" data-perm="backup">
@@ -153,6 +168,8 @@
             <p class="field-label">Últimos respaldos</p><div id="backupLog" class="report-list"></div>
             <p id="storageInfo" class="storage-info"></p>
           </article>
+          </div>
+          </div>
         </section>
 
         <section id="reports" class="view">
@@ -656,7 +673,7 @@
       </div>
     </dialog>
 
-    <div id="toast" class="toast" role="status"></div>
+    <div id="toast" class="toast" role="status" popover="manual"></div>
 
     <!-- Cajón de navegación móvil -->
     <div id="mobileMenuOverlay" class="mobile-overlay" aria-hidden="true"></div>

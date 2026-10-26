@@ -397,7 +397,13 @@ globalThis.paymentsToday = paymentsToday;
 function formatQty(value) { return Number.isInteger(value) ? value : value.toFixed(1).replace('.', ','); }
 function formatDate(date) { const d = new Date(`${date}T12:00:00`); return Number.isNaN(d.getTime()) ? '—' : new Intl.DateTimeFormat('es-CO', { day:'2-digit', month:'short' }).format(d); }
 function uid(prefix) { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
-function showToast(message) { const el = document.querySelector('#toast'); el.textContent = message; el.classList.add('visible'); setTimeout(() => el.classList.remove('visible'), 2500); }
+let toastTimer = null;
+function showToast(message) {
+  const el = document.querySelector('#toast'); el.textContent = message;
+  // Popover: se reabre en cada aviso para quedar en la top layer por encima del modal abierto (p. ej. «Registrar gasto»)
+  if (typeof el.showPopover === 'function') { try { if (el.matches(':popover-open')) el.hidePopover(); el.showPopover(); } catch { /* sin Popover API: queda el z-index */ } }
+  el.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('visible'), 2500);
+}
 function isShiftOpen() { return state.cashShift?.status === 'open'; }
 function currentShiftPayments() { return state.payments.filter(payment=>payment.shiftId===state.cashShift?.id); }
 function cashSalesToday() {
@@ -483,6 +489,7 @@ function renderAll() {
   if (typeof renderReports === 'function') renderReports(); else if (typeof globalThis.renderReports === 'function') globalThis.renderReports();
   renderHistory();
   renderProfile();
+  renderSubscription();
   if (typeof applyPermissions === 'function') applyPermissions(); else if (typeof globalThis.applyPermissions === 'function') globalThis.applyPermissions();
   if (typeof renderUserChip === 'function') renderUserChip(); else if (typeof globalThis.renderUserChip === 'function') globalThis.renderUserChip();
   if (typeof renderInvoices === 'function') renderInvoices(); else if (typeof globalThis.renderInvoices === 'function') globalThis.renderInvoices();
@@ -2136,6 +2143,41 @@ if (typeof document !== 'undefined' && typeof document.querySelector === 'functi
     document.querySelector('#suspendedRetry').addEventListener('click', retrySubscriptionCheck);
   }
 }
+/* ---------- Licencia en Mi negocio y aviso preventivo de vencimiento ----------
+   Solo informativo: no bloquea ventas. El bloqueo real es negocios.activo = false (enforceSubscription). */
+const SUBSCRIPTION_WARN_DAYS = 3;
+const subscriptionDateFmt = new Intl.DateTimeFormat('es-CO', { day: 'numeric', month: 'long', year: 'numeric' });
+function subscriptionInfo(sub, now = Date.now()) {
+  const known = Boolean(sub && (typeof sub.active === 'boolean' || sub.plan || sub.expiresAt));
+  const expires = sub?.expiresAt ? new Date(sub.expiresAt) : null, validDate = expires && !Number.isNaN(expires.getTime());
+  const daysLeft = validDate ? Math.ceil((expires.getTime() - now) / 86400000) : null;
+  const active = sub?.active !== false;
+  let banner = null;
+  if (known && active && daysLeft !== null && daysLeft <= SUBSCRIPTION_WARN_DAYS) {
+    const when = daysLeft < 0 ? 'Tu suscripción está vencida' : daysLeft === 0 ? 'Tu suscripción vence hoy' : `Tu suscripción vence en ${daysLeft} ${daysLeft === 1 ? 'día' : 'días'}`;
+    banner = { text: `${when}. Comunícate con soporte para renovar tu servicio.`, urgent: daysLeft <= 1 };
+  }
+  const plan = sub?.plan ? `Plan ${sub.plan.charAt(0).toUpperCase()}${sub.plan.slice(1)}` : '—';
+  return { known, active, plan, expiryLabel: validDate ? subscriptionDateFmt.format(expires) : '—', daysLeft, banner };
+}
+function renderSubscription() {
+  if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
+  const info = subscriptionInfo(isDemoMode() ? null : state?.subscription);
+  const badge = document.querySelector('#subscriptionStatus');
+  if (badge) {
+    badge.textContent = isDemoMode() ? 'Demostración' : !info.known ? 'Sin datos' : info.active ? 'Licencia activa' : 'Suspendida';
+    badge.className = `subscription-badge${info.known ? (info.active ? ' is-active' : ' is-suspended') : ''}`;
+  }
+  const plan = document.querySelector('#subscriptionPlan'); if (plan) plan.textContent = info.plan;
+  const expiry = document.querySelector('#subscriptionExpiry'); if (expiry) expiry.textContent = info.expiryLabel;
+  const note = document.querySelector('#subscriptionNote');
+  if (note) note.textContent = isDemoMode() ? 'El Modo Demo no tiene licencia asociada.' : !info.known ? 'Los datos de la licencia se actualizan al sincronizar con la nube.' : state.subscription?.checkedAt ? `Verificado el ${fmtDateTime(state.subscription.checkedAt)}` : '';
+  document.querySelectorAll('[data-subscription-banner]').forEach(el => {
+    el.hidden = !info.banner; el.textContent = info.banner?.text || ''; el.classList.toggle('is-urgent', Boolean(info.banner?.urgent));
+  });
+}
+globalThis.renderSubscription = renderSubscription;
+globalThis.subscriptionInfo = subscriptionInfo;
 globalThis.enforceSubscription = enforceSubscription;
 globalThis.relinkTerminal = relinkTerminal;
 
@@ -2203,7 +2245,7 @@ async function bootstrap() {
     enforceSubscription(); // suscripción suspendida (guardada o recién descargada): bloquea el POS
     startBackupSchedule();
     if (globalThis.NexoSync?.init) globalThis.NexoSync.init();
-    setInterval(() => { if (document.visibilityState === 'visible' && !document.querySelector('dialog[open]')) renderTables(); }, 60000);
+    setInterval(() => { renderSubscription(); if (document.visibilityState === 'visible' && !document.querySelector('dialog[open]')) renderTables(); }, 60000); // el aviso de vencimiento cuenta los días sin recargar
   }
   catch (error) {
     console.error(error);
