@@ -64,7 +64,7 @@ La carpeta incluye un proyecto de Electron que empaqueta la app como programa in
 **Crear el instalador (una sola vez, en un PC con Windows e internet):**
 1. Instala Node.js LTS desde https://nodejs.org
 2. Haz doble clic en `crear-instalador-windows.bat`.
-3. Al terminar se abre la carpeta `dist` con `Brasa POS Setup 1.0.0.exe`. Cópialo al PC del negocio y ejecútalo: crea el acceso directo en el escritorio y en el menú Inicio.
+3. Al terminar se abre la carpeta `dist` con `NexoBar-Setup-<versión>.exe` (por ejemplo `NexoBar-Setup-1.0.1.exe`). Cópialo al PC del negocio y ejecútalo: crea el acceso directo en el escritorio y en el menú Inicio.
 
 Para probar sin instalar: `probar-en-escritorio.bat`.
 
