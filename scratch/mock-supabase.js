@@ -1,0 +1,141 @@
+// scratch/mock-supabase.js
+// Cliente Supabase simulado en memoria para las pruebas de scratch/ (no toca la base real).
+// Imita la API de supabase-js que usa sync.js (from/select/eq/in/order/limit/single/maybeSingle,
+// insert/upsert/update/delete, auth, rpc, channel) y el RLS de producción:
+//   - Sin sesión (rol 'anon')  → "permission denied for table X" (42501).
+//   - Con sesión 'authenticated' → solo ve y escribe filas de su app_metadata.business_id
+//     (columna `id` en negocios, `business_id` en el resto).
+//
+// Uso:
+//   const { createMockSupabase } = require('./mock-supabase.js');
+//   const sb = createMockSupabase({ businessId: 'nexobar_default', seed: { productos: [...] } });
+//   global.supabase = { createClient: () => sb };
+
+const clone = value => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+const scopeColumn = table => (table === 'negocios' ? 'id' : 'business_id');
+const denied = table => ({ code: '42501', message: `permission denied for table ${table}`, details: null, hint: null });
+const rlsViolation = table => ({ code: '42501', message: `new row violates row-level security policy for table "${table}"`, details: null, hint: null });
+
+function createMockSupabase({ businessId = 'nexobar_default', authenticated = true, seed = {}, rpc = {} } = {}) {
+  const tables = {};
+  for (const [name, rows] of Object.entries(seed)) tables[name] = clone(rows);
+  const tableRows = name => (tables[name] = tables[name] || []);
+
+  let session = authenticated ? makeSession(businessId) : null;
+  function makeSession(bId) {
+    return { access_token: `mock-jwt-${bId}`, token_type: 'bearer', user: { id: `user-${bId}`, email: `${bId}@test.local`, app_metadata: { business_id: bId }, user_metadata: {} } };
+  }
+  const currentBusiness = () => session?.user?.app_metadata?.business_id || null;
+
+  function query(table) {
+    const state = { action: 'select', filters: [], order: null, limit: null, single: null, head: false, count: null, returning: false, payload: null, onConflict: 'id' };
+    const matches = row => state.filters.every(([op, col, val]) => {
+      const cell = row[col];
+      switch (op) {
+        case 'eq': return String(cell) === String(val);
+        case 'neq': return String(cell) !== String(val);
+        case 'in': return val.map(String).includes(String(cell));
+        case 'is': return cell === val || (val === null && cell == null);
+        case 'gt': return cell > val;
+        case 'gte': return cell >= val;
+        case 'lt': return cell < val;
+        case 'lte': return cell <= val;
+        default: return true;
+      }
+    });
+
+    function execute() {
+      const bId = currentBusiness();
+      if (!bId) return { data: null, error: denied(table), count: null };
+      const col = scopeColumn(table), rows = tableRows(table);
+      const visible = rows.filter(row => String(row[col]) === String(bId));
+
+      if (state.action === 'upsert' || state.action === 'insert') {
+        const records = Array.isArray(state.payload) ? state.payload : [state.payload];
+        if (records.some(r => String(r[col]) !== String(bId))) return { data: null, error: rlsViolation(table), count: null };
+        const written = records.map(record => {
+          const key = state.onConflict;
+          const existing = state.action === 'upsert' ? rows.find(row => String(row[key]) === String(record[key])) : null;
+          if (existing && String(existing[col]) !== String(bId)) return null; // fila de otro negocio: invisible
+          if (existing) { Object.assign(existing, clone(record)); return existing; }
+          const row = clone(record); rows.push(row); return row;
+        });
+        if (written.includes(null)) return { data: null, error: rlsViolation(table), count: null };
+        return { data: state.returning ? clone(written) : null, error: null, count: null };
+      }
+      if (state.action === 'update') {
+        if (state.payload && col in state.payload && String(state.payload[col]) !== String(bId)) return { data: null, error: rlsViolation(table), count: null };
+        const updated = visible.filter(matches);
+        updated.forEach(row => Object.assign(row, clone(state.payload)));
+        return { data: state.returning ? clone(updated) : null, error: null, count: null };
+      }
+      if (state.action === 'delete') {
+        const removed = visible.filter(matches);
+        tables[table] = rows.filter(row => !removed.includes(row));
+        return { data: state.returning ? clone(removed) : null, error: null, count: null };
+      }
+
+      // select
+      let result = visible.filter(matches);
+      if (state.order) {
+        const { col: orderCol, ascending } = state.order;
+        result = [...result].sort((a, b) => (a[orderCol] > b[orderCol] ? 1 : a[orderCol] < b[orderCol] ? -1 : 0) * (ascending ? 1 : -1));
+      }
+      if (state.limit != null) result = result.slice(0, state.limit);
+      const count = state.count ? result.length : null;
+      if (state.head) return { data: null, error: null, count };
+      if (state.single) {
+        if (result.length === 1) return { data: clone(result[0]), error: null, count };
+        if (result.length === 0 && state.single === 'maybe') return { data: null, error: null, count };
+        return { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' }, count };
+      }
+      return { data: clone(result), error: null, count };
+    }
+
+    const builder = {
+      select(cols = '*', opts = {}) {
+        if (state.action === 'select') { state.head = Boolean(opts.head); state.count = opts.count || null; } else state.returning = true;
+        return builder;
+      },
+      insert(payload) { state.action = 'insert'; state.payload = payload; return builder; },
+      upsert(payload, opts = {}) { state.action = 'upsert'; state.payload = payload; state.onConflict = opts.onConflict || 'id'; return builder; },
+      update(payload) { state.action = 'update'; state.payload = payload; return builder; },
+      delete() { state.action = 'delete'; return builder; },
+      eq(col, val) { state.filters.push(['eq', col, val]); return builder; },
+      neq(col, val) { state.filters.push(['neq', col, val]); return builder; },
+      in(col, vals) { state.filters.push(['in', col, vals || []]); return builder; },
+      is(col, val) { state.filters.push(['is', col, val]); return builder; },
+      gt(col, val) { state.filters.push(['gt', col, val]); return builder; },
+      gte(col, val) { state.filters.push(['gte', col, val]); return builder; },
+      lt(col, val) { state.filters.push(['lt', col, val]); return builder; },
+      lte(col, val) { state.filters.push(['lte', col, val]); return builder; },
+      order(col, opts = {}) { state.order = { col, ascending: opts.ascending !== false }; return builder; },
+      limit(n) { state.limit = n; return builder; },
+      single() { state.single = 'one'; return Promise.resolve(execute()); },
+      maybeSingle() { state.single = 'maybe'; return Promise.resolve(execute()); },
+      then(resolve, reject) { return Promise.resolve().then(execute).then(resolve, reject); }
+    };
+    return builder;
+  }
+
+  const channel = { on() { return channel; }, subscribe(cb) { if (typeof cb === 'function') cb('SUBSCRIBED'); return channel; }, unsubscribe() { return Promise.resolve('ok'); } };
+
+  return {
+    from: query,
+    rpc: async (name, params) => (rpc[name] ? rpc[name](params, { session, tables }) : { data: null, error: { code: 'PGRST202', message: `Could not find the function public.${name}` } }),
+    channel: () => channel,
+    removeChannel: async () => 'ok',
+    auth: {
+      getSession: async () => ({ data: { session: clone(session) }, error: null }),
+      getUser: async () => ({ data: { user: clone(session?.user) || null }, error: null }),
+      signInWithPassword: async () => ({ data: { user: clone(session?.user) || null, session: clone(session) }, error: session ? null : { message: 'Invalid login credentials' } }),
+      signOut: async () => { session = null; return { error: null }; },
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } })
+    },
+    // Ayudas solo para pruebas
+    __tables: tables,
+    __setSession(bId) { session = bId ? makeSession(bId) : null; }
+  };
+}
+
+module.exports = { createMockSupabase };

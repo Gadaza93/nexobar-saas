@@ -1,4 +1,4 @@
-const CACHE = 'nexobar-pos-v15';
+const CACHE = 'nexobar-pos-v16';
 const ASSETS = [
   './',
   './index.html',
@@ -22,6 +22,8 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   // Don't intercept cross-origin API calls (like Supabase REST)
   if (url.origin !== self.location.origin) return;
+  // Panel SuperAdmin: siempre en línea y sin caché, para que sus cambios se vean de inmediato
+  if (/\/admin(\.html|\.js|\.css)?$/.test(url.pathname)) return;
 
   event.respondWith(
     caches.match(event.request).then(cached => {

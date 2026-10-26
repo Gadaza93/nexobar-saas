@@ -1,92 +1,11 @@
 // Test Centralized Admin PIN Sync with Supabase (Desktop <-> Supabase <-> Web)
-const SUPABASE_URL = "https://fthjtbhxqqzqpyhtynaa.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_qg2FVUMhBsIshhIRCOGISg_vLF1PLuy";
 const DEFAULT_BUSINESS_ID = "nexobar_default";
-
-function createRestClient(baseUrl, apiKey) {
-  const headers = {
-    apikey: apiKey,
-    Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-    Prefer: "return=representation"
-  };
-
-  return {
-    from: (table) => {
-      let queryParams = [];
-
-      const builder = {
-        select: (cols = '*', opts = {}) => {
-          queryParams.push(`select=${encodeURIComponent(cols)}`);
-          return builder;
-        },
-        eq: (col, val) => {
-          queryParams.push(`${col}=eq.${encodeURIComponent(val)}`);
-          return builder;
-        },
-        order: (col, opts = {}) => {
-          queryParams.push(`order=${col}.${opts.ascending ? 'asc' : 'desc'}`);
-          return builder;
-        },
-        limit: (n) => {
-          queryParams.push(`limit=${n}`);
-          return builder;
-        },
-        maybeSingle: async () => {
-          const qs = queryParams.length ? `?${queryParams.join('&')}` : '';
-          const res = await fetch(`${baseUrl}/rest/v1/${table}${qs}`, {
-            headers: { ...headers, Accept: 'application/vnd.pgrst.object+json' }
-          });
-          if (res.status === 406 || res.status === 404) return { data: null, error: null };
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({ message: res.statusText }));
-            return { data: null, error: err };
-          }
-          const data = await res.json();
-          return { data, error: null };
-        },
-        single: async () => builder.maybeSingle(),
-        then: (onResolve, onReject) => {
-          const qs = queryParams.length ? `?${queryParams.join('&')}` : '';
-          return fetch(`${baseUrl}/rest/v1/${table}${qs}`, { headers })
-            .then(async res => {
-              if (!res.ok) {
-                const err = await res.json().catch(() => ({ message: res.statusText }));
-                return { data: null, error: err };
-              }
-              const data = await res.json();
-              return { data, error: null };
-            })
-            .then(onResolve, onReject);
-        },
-        upsert: async (records, opts = {}) => {
-          const onConflict = opts.onConflict ? `?on_conflict=${opts.onConflict}` : '';
-          const res = await fetch(`${baseUrl}/rest/v1/${table}${onConflict}`, {
-            method: 'POST',
-            headers: { ...headers, Prefer: 'resolution=merge-duplicates,return=representation' },
-            body: JSON.stringify(records)
-          });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({ message: res.statusText }));
-            return { data: null, error: err };
-          }
-          const data = await res.json().catch(() => null);
-          return { data, error: null };
-        }
-      };
-
-      return builder;
-    },
-    channel: () => {
-      const ch = { on: () => ch, subscribe: () => ch };
-      return ch;
-    }
-  };
-}
+// Cliente Supabase simulado con RLS (sesión 'authenticated' del negocio): no toca la base real
+const { createMockSupabase } = require("./mock-supabase.js");
 
 async function runTests() {
   console.log("=== INICIANDO PRUEBAS DE CENTRALIZACIÓN DE PIN DE ADMINISTRADOR ===");
-  const sb = createRestClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const sb = createMockSupabase({ businessId: DEFAULT_BUSINESS_ID });
 
   // 1. Mock global
   global.window = global;

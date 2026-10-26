@@ -1,96 +1,12 @@
 // Test Dashboard Metrics Validation & Shift Force Reset
-const SUPABASE_URL = "https://fthjtbhxqqzqpyhtynaa.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_qg2FVUMhBsIshhIRCOGISg_vLF1PLuy";
 const DEFAULT_BUSINESS_ID = "nexobar_default";
-
-function createRestClient(baseUrl, apiKey) {
-  const headers = {
-    apikey: apiKey,
-    Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-    Prefer: "return=representation"
-  };
-
-  return {
-    from: (table) => {
-      let queryParams = [];
-      let method = 'GET';
-      let bodyData = null;
-      let preferHeader = '';
-      let isSingle = false;
-
-      const execute = async () => {
-        const qs = queryParams.length ? `?${queryParams.join('&')}` : '';
-        const fetchHeaders = { ...headers };
-        if (preferHeader) fetchHeaders.Prefer = preferHeader;
-        const opts = { method, headers: fetchHeaders };
-        if (bodyData) opts.body = JSON.stringify(bodyData);
-        const res = await fetch(`${baseUrl}/rest/v1/${table}${qs}`, opts);
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ message: res.statusText }));
-          return { data: null, error: err };
-        }
-        if (method === 'DELETE') {
-          return { data: null, error: null };
-        }
-        const data = await res.json().catch(() => null);
-        return { data: isSingle ? (Array.isArray(data) ? data[0] || null : data) : data, error: null };
-      };
-
-      const builder = {
-        select: (cols = '*', opts = {}) => {
-          queryParams.push(`select=${encodeURIComponent(cols)}`);
-          return builder;
-        },
-        eq: (col, val) => {
-          queryParams.push(`${col}=eq.${encodeURIComponent(val)}`);
-          return builder;
-        },
-        order: (col, opts = {}) => {
-          queryParams.push(`order=${encodeURIComponent(col)}.${opts.ascending ? 'asc' : 'desc'}`);
-          return builder;
-        },
-        limit: (n) => {
-          queryParams.push(`limit=${n}`);
-          return builder;
-        },
-        delete: () => {
-          method = 'DELETE';
-          return builder;
-        },
-        upsert: (records, opts = {}) => {
-          method = 'POST';
-          if (opts.onConflict) queryParams.push(`on_conflict=${encodeURIComponent(opts.onConflict)}`);
-          preferHeader = 'resolution=merge-duplicates,return=representation';
-          bodyData = records;
-          return builder;
-        },
-        maybeSingle: () => {
-          isSingle = true;
-          return builder;
-        },
-        single: () => {
-          isSingle = true;
-          return builder;
-        },
-        then: (onfulfilled, onrejected) => {
-          return execute().then(onfulfilled, onrejected);
-        }
-      };
-
-      return builder;
-    },
-    channel: () => {
-      const ch = { on: () => ch, subscribe: () => ch };
-      return ch;
-    }
-  };
-}
+// Cliente Supabase simulado con RLS (sesión 'authenticated' del negocio): no toca la base real
+const { createMockSupabase } = require("./mock-supabase.js");
 
 async function runTests() {
   console.log("=== INICIANDO PRUEBAS: VALIDACIÓN DE PEDIDOS ABIERTOS Y RESET DE CAJA ===");
   global.__IS_NODE_TEST__ = true;
-  const sb = createRestClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const sb = createMockSupabase({ businessId: DEFAULT_BUSINESS_ID });
 
   // 1. Mock DOM
   global.window = global;

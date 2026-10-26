@@ -1,96 +1,17 @@
-const SUPABASE_URL = "https://fthjtbhxqqzqpyhtynaa.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_qg2FVUMhBsIshhIRCOGISg_vLF1PLuy";
 const DEFAULT_BUSINESS_ID = "nexobar_default";
-
-function createRestClient(baseUrl, anonKey) {
-  const headers = {
-    apikey: anonKey,
-    Authorization: `Bearer ${anonKey}`,
-    'Content-Type': 'application/json'
-  };
-
-  return {
-    from: (table) => {
-      let queryParams = [];
-      let method = 'GET';
-      let bodyData = null;
-      let preferHeader = null;
-      let isSingle = false;
-
-      const execute = async () => {
-        const qs = queryParams.length ? `?${queryParams.join('&')}` : '';
-        const fetchHeaders = { ...headers };
-        if (preferHeader) fetchHeaders.Prefer = preferHeader;
-        const opts = { method, headers: fetchHeaders };
-        if (bodyData) opts.body = JSON.stringify(bodyData);
-        const res = await fetch(`${baseUrl}/rest/v1/${table}${qs}`, opts);
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ message: res.statusText }));
-          return { data: null, error: err };
-        }
-        if (method === 'DELETE') {
-          return { data: null, error: null };
-        }
-        const data = await res.json().catch(() => null);
-        return { data: isSingle ? (Array.isArray(data) ? data[0] || null : data) : data, error: null };
-      };
-
-      const builder = {
-        select: (cols = '*', opts = {}) => {
-          queryParams.push(`select=${encodeURIComponent(cols)}`);
-          return builder;
-        },
-        eq: (col, val) => {
-          queryParams.push(`${col}=eq.${encodeURIComponent(val)}`);
-          return builder;
-        },
-        in: (col, vals) => {
-          queryParams.push(`${col}=in.(${vals.map(v => encodeURIComponent(v)).join(',')})`);
-          return builder;
-        },
-        order: (col, opts = {}) => {
-          queryParams.push(`order=${encodeURIComponent(col)}.${opts.ascending ? 'asc' : 'desc'}`);
-          return builder;
-        },
-        limit: (n) => {
-          queryParams.push(`limit=${n}`);
-          return builder;
-        },
-        delete: () => {
-          method = 'DELETE';
-          return builder;
-        },
-        update: (data) => {
-          method = 'PATCH';
-          bodyData = data;
-          return builder;
-        },
-        upsert: (data, opts = {}) => {
-          method = 'POST';
-          bodyData = data;
-          preferHeader = 'resolution=merge-duplicates,return=representation';
-          return builder;
-        },
-        maybeSingle: () => {
-          isSingle = true;
-          return builder.then ? builder.then(execute) : execute();
-        },
-        then: (onfulfilled, onrejected) => execute().then(onfulfilled, onrejected)
-      };
-
-      return builder;
-    },
-    channel: () => {
-      const ch = { on: () => ch, subscribe: () => ch };
-      return ch;
-    }
-  };
-}
+// Cliente Supabase simulado con RLS (sesión 'authenticated' del negocio): no toca la base real
+const { createMockSupabase } = require("./mock-supabase.js");
 
 global.__IS_NODE_TEST__ = true;
 global.window = global;
 global.window.confirm = () => true;
-global.supabase = { createClient: () => createRestClient(SUPABASE_URL, SUPABASE_ANON_KEY) };
+global.supabase = { createClient: () => createMockSupabase({ businessId: DEFAULT_BUSINESS_ID, seed: {
+    productos: [
+      { id: "mock_prod_1", business_id: DEFAULT_BUSINESS_ID, nombre: "Cerveza Club Colombia", categoria: "Cervezas", precio: 6000, costo: 3500, stock: 48, min_stock: 6, activo: true },
+      { id: "mock_prod_2", business_id: DEFAULT_BUSINESS_ID, nombre: "Aguardiente Antioqueño 375ml", categoria: "Licores", precio: 45000, costo: 28000, stock: 12, min_stock: 2, activo: true },
+      { id: "mock_prod_3", business_id: DEFAULT_BUSINESS_ID, nombre: "Papas Margarita", categoria: "Dulceria", precio: 3000, costo: 1500, stock: 30, min_stock: 5, activo: true }
+    ]
+  } }) };
 global.navigator = { onLine: true };
 global.localStorage = {
   _data: {},

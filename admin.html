@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="es-CO">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#12141A" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="description" content="NexoBar SaaS · Panel SuperAdmin para gestionar negocios y licencias." />
+    <script>try{var t=localStorage.getItem("nexobar-theme")||localStorage.getItem("brasa-theme");if(t==="light")document.documentElement.dataset.theme="light";}catch(e){}</script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="design.css" />
+    <link rel="stylesheet" href="admin.css" />
+    <title>NexoBar · Panel SuperAdmin</title>
+  </head>
+  <body class="admin-body">
+    <!-- Mientras se revisa la sesión guardada -->
+    <p id="adminBooting" class="admin-booting muted">Cargando panel…</p>
+
+    <!-- Vista de login exclusiva para SuperAdmin -->
+    <section id="adminLogin" class="admin-login" hidden>
+      <div class="admin-login-card">
+        <div class="login-brand activation-brand">
+          <span class="brand-mark"><img src="logo.png" alt="NexoBar" /></span>
+          <p class="eyebrow">NexoBar SaaS</p>
+          <h2>Acceso SuperAdmin</h2>
+          <p class="muted">Panel exclusivo para administrar negocios y licencias.</p>
+        </div>
+        <form id="adminLoginForm" class="activation-form" novalidate>
+          <label class="activation-field">
+            <span>Correo electrónico</span>
+            <input id="adminEmail" type="email" autocomplete="username" inputmode="email" placeholder="admin@nexobar.co" required />
+          </label>
+          <label class="activation-field">
+            <span>Contraseña</span>
+            <input id="adminPassword" type="password" autocomplete="current-password" placeholder="••••••••" required />
+          </label>
+          <p id="adminLoginError" class="login-error activation-message" role="alert"></p>
+          <button id="adminLoginSubmit" type="submit" class="primary-button activation-primary">Ingresar al panel</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Tablero de Control -->
+    <div id="adminApp" class="admin-app" hidden>
+      <header class="admin-header">
+        <div class="admin-header-brand">
+          <span class="brand-mark"><img src="logo.png" alt="NexoBar" /></span>
+          <div>
+            <p class="eyebrow">NexoBar SaaS</p>
+            <h1>Panel SuperAdmin SaaS</h1>
+          </div>
+        </div>
+        <div class="admin-header-actions">
+          <span id="adminWho" class="admin-who muted"></span>
+          <button id="adminRefresh" type="button" class="outline-button">Actualizar</button>
+          <button id="adminLogout" type="button" class="outline-button">Cerrar sesión</button>
+        </div>
+      </header>
+
+      <main class="admin-main">
+        <section class="stats-grid admin-stats" aria-label="Métricas rápidas">
+          <article class="stat-card accent"><span>Total de clientes / bares</span><strong id="metricTotal">0</strong><small>Negocios registrados</small></article>
+          <article class="stat-card"><span><i class="admin-badge is-active">Activos</i></span><strong id="metricActive">0</strong><small>Con licencia vigente</small></article>
+          <article class="stat-card"><span><i class="admin-badge is-suspended">Suspendidos</i></span><strong id="metricSuspended">0</strong><small>POS bloqueado</small></article>
+          <article class="stat-card"><span>Ventas globales procesadas</span><strong id="metricSales">0</strong><small>Ventas registradas en todos los bares</small></article>
+        </section>
+
+        <section class="admin-table-card">
+          <div class="admin-table-head">
+            <h2>Negocios y licencias</h2>
+            <p id="adminLastUpdate" class="muted"></p>
+          </div>
+          <div class="admin-table-wrap">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>ID Negocio</th>
+                  <th>Nombre del Bar</th>
+                  <th>Plan</th>
+                  <th class="num">Productos</th>
+                  <th class="num">Ventas</th>
+                  <th>Fecha de vencimiento</th>
+                  <th>Estado</th>
+                  <th class="actions">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="negociosBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status"></div>
+    <script src="./admin.js"></script>
+  </body>
+</html>
