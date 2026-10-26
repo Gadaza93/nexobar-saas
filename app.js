@@ -2039,40 +2039,105 @@ function ensureTerminalLinked(hasLocalData) {
   if (hasLocalData || (syncId && syncId !== 'nexobar_default')) { linkTerminal(syncId || 'nexobar_default', { legacy: true }); return true; }
   return false;
 }
-function showActivation() {
-  return new Promise(resolve => {
-    const dialog = document.querySelector('#activationDialog'), form = document.querySelector('#activationForm');
-    const submit = document.querySelector('#activationSubmit'), demo = document.querySelector('#activationDemo');
-    const emailInput = document.querySelector('#activationEmail'), passwordInput = document.querySelector('#activationPassword');
-    const setMessage = (text, info = false) => { const el = document.querySelector('#activationError'); el.textContent = text || ''; el.classList.toggle('is-info', info); };
-    const setBusy = busy => { submit.disabled = demo.disabled = busy; submit.textContent = busy ? 'Vinculando…' : 'Vincular y Descargar Catálogo'; };
+// La misma pantalla sirve para la primera vinculación (bloqueante) y para re-vincular cuando la sesión
+// de Supabase venció o la caja se vinculó antes de Supabase Auth (se puede cerrar y seguir offline).
+let activationResolve = null, activationRelink = false;
+const ACTIVATION_SUBTITLE = 'Ingresa las credenciales maestras de tu negocio para activar esta caja';
+const RELINK_SUBTITLE = 'La sesión de esta caja venció. Ingresa de nuevo las credenciales maestras para reanudar la sincronización.';
+function finishActivation(linked) {
+  const dialog = document.querySelector('#activationDialog'); if (dialog.open) dialog.close();
+  const resolve = activationResolve; activationResolve = null; if (resolve) resolve(linked);
+}
+function setupActivation() {
+  const dialog = document.querySelector('#activationDialog'); if (dialog.dataset.ready) return; dialog.dataset.ready = '1';
+  const submit = document.querySelector('#activationSubmit'), demo = document.querySelector('#activationDemo');
+  const emailInput = document.querySelector('#activationEmail'), passwordInput = document.querySelector('#activationPassword');
+  const setMessage = (text, info = false) => { const el = document.querySelector('#activationError'); el.textContent = text || ''; el.classList.toggle('is-info', info); };
+  const setBusy = busy => { submit.disabled = demo.disabled = busy; submit.textContent = busy ? 'Vinculando…' : 'Vincular y Descargar Catálogo'; };
 
-    dialog.addEventListener('cancel', e => e.preventDefault()); // no se puede cerrar con Escape
-    demo.addEventListener('click', () => { const url = new URL(location.href); url.searchParams.set('demo', 'true'); location.assign(url.href); });
-    form.addEventListener('submit', async event => {
-      event.preventDefault();
-      const email = emailInput.value.trim().toLowerCase(), password = passwordInput.value;
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setMessage('Escribe un correo electrónico válido.'); return emailInput.focus(); }
-      if (!password) { setMessage('Escribe la contraseña maestra.'); return passwordInput.focus(); }
-      setBusy(true); setMessage('Verificando credenciales…', true);
-      const result = globalThis.NexoSync?.activateTerminal ? await NexoSync.activateTerminal(email, password) : { ok: false, error: 'El módulo de sincronización no cargó. Recarga la app.' };
-      if (!result.ok) { setBusy(false); setMessage(result.error); return passwordInput.focus(); }
+  // La primera vinculación no se puede cerrar con Escape; la re-vinculación sí
+  dialog.addEventListener('cancel', e => { e.preventDefault(); if (activationRelink) finishActivation(false); });
+  demo.addEventListener('click', () => {
+    if (activationRelink) return finishActivation(false);
+    const url = new URL(location.href); url.searchParams.set('demo', 'true'); location.assign(url.href);
+  });
+  document.querySelector('#activationForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const email = emailInput.value.trim().toLowerCase(), password = passwordInput.value;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setMessage('Escribe un correo electrónico válido.'); return emailInput.focus(); }
+    if (!password) { setMessage('Escribe la contraseña maestra.'); return passwordInput.focus(); }
+    setBusy(true); setMessage('Verificando credenciales…', true);
+    const result = globalThis.NexoSync?.activateTerminal ? await NexoSync.activateTerminal(email, password) : { ok: false, error: 'El módulo de sincronización no cargó. Recarga la app.' };
+    if (!result.ok) { setBusy(false); setMessage(result.error); return passwordInput.focus(); }
+    // Re-vincular nunca cambia de negocio: los datos locales pertenecen al negocio ya vinculado
+    if (activationRelink && result.businessId !== state.terminal?.businessId) {
+      await NexoSync.signOutTerminal(); setBusy(false);
+      return setMessage(`Estas credenciales son de otro negocio. Esta caja está vinculada a «${state.terminal?.businessId}».`);
+    }
 
-      linkTerminal(result.businessId, { email: result.email });
-      setMessage('Descargando catálogo del negocio…', true);
-      let pulled = false;
-      try { pulled = Boolean((await NexoSync.pullAllFromSupabase(result.businessId))?.ok); } catch (e) { console.warn('[NexoSync] No se pudo descargar el catálogo:', e); }
-      state.profile.syncId = result.businessId; // la configuración remota no debe cambiar el negocio vinculado
-      cleanupOrphanOrders(); scheduleSave();
+    linkTerminal(result.businessId, { email: result.email });
+    setMessage('Descargando catálogo del negocio…', true);
+    let pulled = false;
+    try { pulled = Boolean((await NexoSync.pullAllFromSupabase(result.businessId))?.ok); } catch (e) { console.warn('[NexoSync] No se pudo descargar el catálogo:', e); }
+    state.profile.syncId = result.businessId; // la configuración remota no debe cambiar el negocio vinculado
+    cleanupOrphanOrders(); scheduleSave();
 
-      passwordInput.value = ''; setMessage(''); setBusy(false); dialog.close();
-      showToast(pulled ? 'Terminal vinculada. Catálogo descargado.' : 'Terminal vinculada. El catálogo se descargará al sincronizar.');
-      resolve();
-    });
-
-    dialog.showModal(); emailInput.focus();
+    passwordInput.value = ''; setMessage(''); setBusy(false);
+    showToast(activationRelink ? 'Terminal vinculada de nuevo. Sincronización reanudada.' : pulled ? 'Terminal vinculada. Catálogo descargado.' : 'Terminal vinculada. El catálogo se descargará al sincronizar.');
+    if (activationRelink) { NexoSync.scheduleSync(300); renderAll(); }
+    finishActivation(true);
   });
 }
+function showActivation({ relink = false } = {}) {
+  setupActivation(); activationRelink = relink;
+  const dialog = document.querySelector('#activationDialog'), emailInput = document.querySelector('#activationEmail');
+  document.querySelector('#activationDialog .activation-brand .muted').textContent = relink ? RELINK_SUBTITLE : ACTIVATION_SUBTITLE;
+  document.querySelector('#activationDemo').textContent = relink ? 'Seguir sin sincronizar' : 'Probar Modo Demo';
+  if (relink && state.terminal?.email) emailInput.value = state.terminal.email;
+  return new Promise(resolve => {
+    activationResolve = resolve;
+    if (!dialog.open) dialog.showModal();
+    (relink && emailInput.value ? document.querySelector('#activationPassword') : emailInput).focus();
+  });
+}
+function relinkTerminal() {
+  if (isDemoMode() || !state.terminal?.businessId || isSubscriptionSuspended()) return Promise.resolve(false);
+  if (document.querySelector('#activationDialog')?.open) return Promise.resolve(false);
+  return showActivation({ relink: true });
+}
+
+/* ---------- Suscripción del negocio (negocios.activo) ----------
+   Con activo=false el POS queda bloqueado por un modal que no se puede cerrar. El estado se guarda
+   (state.subscription) para que el bloqueo siga aunque la caja reinicie sin internet. */
+function isSubscriptionSuspended() { return !isDemoMode() && state?.subscription?.active === false; }
+function enforceSubscription() {
+  const dialog = typeof document !== 'undefined' && document.querySelector('#suspendedDialog'); if (!dialog) return;
+  if (!isSubscriptionSuspended()) {
+    if (!dialog.open) return;
+    dialog.close(); if (!session) showLogin(); else showToast('Suscripción reactivada. ¡Bienvenido de nuevo!');
+    return;
+  }
+  document.querySelectorAll('dialog[open]').forEach(d => { if (d !== dialog) d.close(); });
+  if (!dialog.open) dialog.showModal();
+}
+async function retrySubscriptionCheck() {
+  const button = document.querySelector('#suspendedRetry'), note = document.querySelector('#suspendedNote');
+  button.disabled = true; note.textContent = 'Verificando el estado de tu cuenta…';
+  try {
+    const res = await NexoSync.pullAllFromSupabase();
+    note.textContent = !res?.ok ? 'No se pudo verificar. Revisa la conexión a internet.' : isSubscriptionSuspended() ? 'Tu cuenta sigue suspendida.' : '';
+  } catch { note.textContent = 'No se pudo verificar. Revisa la conexión a internet.'; }
+  button.disabled = false;
+}
+if (typeof document !== 'undefined' && typeof document.querySelector === 'function' && !globalThis.__IS_NODE_TEST__) {
+  const suspended = document.querySelector('#suspendedDialog');
+  if (suspended) {
+    suspended.addEventListener('cancel', e => e.preventDefault());
+    document.querySelector('#suspendedRetry').addEventListener('click', retrySubscriptionCheck);
+  }
+}
+globalThis.enforceSubscription = enforceSubscription;
+globalThis.relinkTerminal = relinkTerminal;
 
 async function bootstrap() {
   let saved;
@@ -2116,7 +2181,11 @@ async function bootstrap() {
   if (!isDemoMode() && !ensureTerminalLinked(!isFreshLocal)) { await showActivation(); justActivated = true; }
 
   // Si hay conexión y NO estamos en Modo Demo, sincronizar con Supabase (descargar turno de caja y pedidos activos)
-  if (!justActivated && !isDemoMode() && typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase) {
+  // Sin sesión de Supabase Auth no se descarga: como 'anon' el RLS devolvería listas vacías y se borraría el catálogo local
+  const canPull = !justActivated && !isDemoMode() && typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase;
+  const hasSession = canPull && await NexoSync.hasAuthSession();
+  if (canPull && !hasSession) setTimeout(() => showToast('La sesión de sincronización venció. Toca el indicador de sincronización para volver a vincular esta caja.'), 1500);
+  if (hasSession) {
     try {
       const pullRes = await globalThis.NexoSync.pullAllFromSupabase();
       if (pullRes && pullRes.ok && pullRes.count > 0) {
@@ -2131,6 +2200,7 @@ async function bootstrap() {
   try {
     renderAll();
     initModules();
+    enforceSubscription(); // suscripción suspendida (guardada o recién descargada): bloquea el POS
     startBackupSchedule();
     if (globalThis.NexoSync?.init) globalThis.NexoSync.init();
     setInterval(() => { if (document.visibilityState === 'visible' && !document.querySelector('dialog[open]')) renderTables(); }, 60000);

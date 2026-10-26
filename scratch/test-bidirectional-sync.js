@@ -115,6 +115,8 @@ function createRestClient(baseUrl, apiKey) {
 async function runTests() {
   console.log("=== INICIANDO PRUEBAS DE FORZAR RE-SINCRONIZACIÓN Y SUBIDA DE VENTAS ===");
   const sb = createRestClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  // Terminal vinculada con sesión de Supabase Auth (checkInitialConnection exige sesión para no consultar como 'anon')
+  sb.auth = { getSession: async () => ({ data: { session: { access_token: "test" } }, error: null }) };
 
   // 1. Mock global
   global.window = global;

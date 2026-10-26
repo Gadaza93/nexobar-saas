@@ -77,6 +77,20 @@ async function storageInit() {
   return saved;
 }
 
+/* ---------- Sesión de Supabase Auth ----------
+   El token de la terminal vinculada se guarda en localStorage con clave propia para que, al recargar o
+   reiniciar la app, las consultas sigan como 'authenticated'. NO va dentro de `state`: así no viaja al
+   archivo espejo ni a los respaldos. Sin localStorage (Node, modo privado) queda solo en memoria. */
+const AUTH_STORAGE_KEY = 'nexobar-auth';
+const authMemory = {};
+const authStorage = {
+  getItem(key) { try { const value = localStorage.getItem(key); return value ?? authMemory[key] ?? null; } catch { return authMemory[key] ?? null; } },
+  setItem(key, value) { authMemory[key] = value; try { localStorage.setItem(key, value); } catch { /* queda en memoria */ } },
+  removeItem(key) { delete authMemory[key]; try { localStorage.removeItem(key); } catch { /* sin permiso */ } }
+};
+globalThis.AUTH_STORAGE_KEY = AUTH_STORAGE_KEY;
+globalThis.authStorage = authStorage;
+
 /* ---------- Guardado (agrupa cambios seguidos) ---------- */
 function scheduleSave() { if (!storageReady) return; clearTimeout(saveTimer); saveTimer = setTimeout(() => { saveChain = saveChain.then(persistNow).catch(() => {}); }, 250); }
 async function persistNow() {

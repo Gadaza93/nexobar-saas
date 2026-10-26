@@ -161,10 +161,14 @@ function getClient() {
     const sbFactory = (typeof window !== "undefined" && window.supabase) || (typeof globalThis !== "undefined" && globalThis.supabase);
     if (sbFactory && typeof sbFactory.createClient === "function") {
       syncClient = sbFactory.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        // La sesión de la terminal persiste (storage.js) y se renueva sola: tras recargar, las consultas
+        // siguen como 'authenticated' y el RLS filtra por app_metadata.business_id.
         auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-          detectSessionInUrl: false
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: false,
+          storageKey: globalThis.AUTH_STORAGE_KEY || "nexobar-auth",
+          ...(globalThis.authStorage ? { storage: globalThis.authStorage } : {})
         }
       });
     }
@@ -198,6 +202,37 @@ async function activateTerminal(email, password) {
   } catch (err) {
     console.warn("[NexoSync] Error al activar terminal:", err);
     return { ok: false, error: "No se pudo conectar con el servidor de NexoBar. Intenta de nuevo." };
+  }
+}
+
+// ¿Hay sesión de Supabase Auth? Sin ella las consultas irían como 'anon': con RLS estricto el servidor
+// devolvería listas vacías sin error y la descarga borraría el catálogo local. Por eso no se sincroniza.
+async function hasAuthSession(sb = getClient()) {
+  if (!sb || !sb.auth || typeof sb.auth.getSession !== "function") return false;
+  try {
+    const { data } = await sb.auth.getSession();
+    return Boolean(data?.session);
+  } catch (err) {
+    return false;
+  }
+}
+
+// Cierra la sesión solo en este equipo (no afecta otras cajas del mismo negocio).
+async function signOutTerminal() {
+  const sb = getClient();
+  if (!sb || !sb.auth) return;
+  try { await sb.auth.signOut({ scope: "local" }); } catch (err) { /* sin conexión: el token se descarta igual */ }
+}
+
+// Estado de la suscripción leído de negocios.activo. Se guarda en el estado para que el bloqueo
+// se mantenga aunque la caja reinicie sin internet; solo una descarga con activo=true lo levanta.
+function applySubscriptionStatus(activo) {
+  if (typeof activo !== "boolean" || typeof state === "undefined" || !state) return;
+  const changed = state.subscription?.active !== activo;
+  state.subscription = { active: activo, checkedAt: Date.now() };
+  if (changed && typeof scheduleSave === "function") scheduleSave();
+  if (typeof enforceSubscription === "function") {
+    try { enforceSubscription(); } catch (e) { /* ignore */ }
   }
 }
 
@@ -383,6 +418,11 @@ function updateIndicator(status) {
     topbarText = "En línea / Sincronizado";
     const timeStr = syncState.lastSyncAt ? new Date(syncState.lastSyncAt).toLocaleTimeString("es-CO") : "Reciente";
     tooltip = `Conexión activa con Supabase (${timeStr}). Sin cambios pendientes.`;
+  } else if (status === "auth") {
+    statusClass = "is-offline";
+    labelText = "Sesión vencida";
+    topbarText = "Sesión vencida";
+    tooltip = "La caja sigue funcionando sin conexión. Toca aquí para volver a vincular la terminal y reanudar la sincronización.";
   } else if (status === "syncing") {
     statusClass = "is-syncing";
     labelText = "Sincronizando...";
@@ -423,6 +463,10 @@ async function checkInitialConnection() {
     updateIndicator("offline");
     return false;
   }
+  if (!(await hasAuthSession(sb))) {
+    updateIndicator("auth");
+    return false;
+  }
   try {
     const { error } = await sb.from("productos").select("id", { count: "exact", head: true });
     if (!error) {
@@ -447,7 +491,11 @@ function isTerminalLinked() {
 function scheduleSync(delay = 1000) {
   if (!isTerminalLinked()) return;
   clearTimeout(syncDebounceTimer);
-  syncDebounceTimer = setTimeout(() => {
+  syncDebounceTimer = setTimeout(async () => {
+    if (!(await hasAuthSession())) {
+      updateIndicator("auth");
+      return;
+    }
     syncAll().catch(() => {});
   }, delay);
 }
@@ -1320,6 +1368,7 @@ async function pullAllFromSupabase(businessId) {
     try {
       const { data: negData, error: negErr } = await sb.from("negocios").select("*").eq("id", bId).maybeSingle();
       if (!negErr && negData) {
+        applySubscriptionStatus(negData.activo);
         if (typeof state !== "undefined" && state) {
           state.profile = {
             ...state.profile,
@@ -2058,6 +2107,15 @@ function init() {
 
   if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
     document.addEventListener("click", async (e) => {
+      // Sin sesión (vencida o caja vinculada antes de Supabase Auth): en vez de sincronizar como 'anon',
+      // el indicador y los botones de nube piden volver a vincular la terminal.
+      const cloudTarget = e.target.closest("#syncStatusIndicator, #syncBadgeTopbar, #syncNowButton, #pullFromCloudButton, #sidebarPullButton");
+      if (cloudTarget && !(await hasAuthSession())) {
+        e.preventDefault();
+        updateIndicator("auth");
+        if (typeof relinkTerminal === "function") relinkTerminal();
+        return;
+      }
       if (e.target.closest("#syncStatusIndicator") || e.target.closest("#syncBadgeTopbar") || e.target.closest("#syncNowButton")) {
         e.preventDefault();
         const btn = e.target.closest("button") || e.target.closest("div");
@@ -2151,6 +2209,9 @@ rootScope.NexoSync = {
   getClient,
   activateTerminal,
   isTerminalLinked,
+  hasAuthSession,
+  signOutTerminal,
+  applySubscriptionStatus,
   init,
   syncAll,
   syncData,

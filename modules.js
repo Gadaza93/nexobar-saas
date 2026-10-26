@@ -131,6 +131,7 @@ function showLogin() {
   session = null; sessionStorage.removeItem('brasa-session'); loginTarget = null; loginPin = ''; setLoginError('');
   document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'loginDialog') d.close(); });
   renderLogin(); const dialog = document.querySelector('#loginDialog'); if (!dialog.open) dialog.showModal(); applyPermissions(); renderUserChip();
+  if (typeof enforceSubscription === 'function') enforceSubscription(); // la suscripción suspendida queda por encima del login
 }
 function pressPin(key) {
   if (!loginTarget) return;

@@ -11,13 +11,33 @@ const assert = require('assert');
 console.log('=== PRUEBAS: ACTIVACIÓN DE TERMINAL ===\n');
 
 globalThis.__FORCE_DEMO_MODE__ = false;
-let authResponse = null, lastCredentials = null;
+let authResponse = null, lastCredentials = null, currentSession = null, clientOptions = null, remoteQueries = 0, signedOut = false;
+let negociosRow = { id: 'bar_900123', nombre: 'Bar Central', activo: true };
+// Cadena mínima tipo PostgREST: toda consulta resuelve a lista vacía salvo negocios.maybeSingle()
+function queryChain(table) {
+  remoteQueries++;
+  const chain = {
+    select: () => chain, eq: () => chain, in: () => chain, order: () => chain, limit: () => chain,
+    maybeSingle: async () => ({ data: table === 'negocios' ? negociosRow : null, error: null }),
+    then: (resolve, reject) => Promise.resolve({ data: [], error: null, count: 0 }).then(resolve, reject)
+  };
+  return chain;
+}
 globalThis.supabase = {
-  createClient: () => ({
-    auth: { signInWithPassword: async creds => { lastCredentials = creds; return authResponse; } },
-    from: () => ({})
-  })
+  createClient: (url, key, options) => {
+    clientOptions = options;
+    return {
+      auth: {
+        signInWithPassword: async creds => { lastCredentials = creds; return authResponse; },
+        getSession: async () => ({ data: { session: currentSession }, error: null }),
+        signOut: async () => { signedOut = true; currentSession = null; return { error: null }; }
+      },
+      from: queryChain
+    };
+  }
 };
+globalThis.document = { querySelector: () => null, querySelectorAll: () => [], readyState: 'complete' }; // updateIndicator
+require('../storage.js'); // adaptador de sesión (authStorage)
 const NexoSync = require('../sync.js');
 
 (async () => {
@@ -51,6 +71,50 @@ const NexoSync = require('../sync.js');
   assert.strictEqual(NexoSync.isTerminalLinked(), true);
   delete globalThis.state;
   console.log('   ✅ isTerminalLinked bloquea init()/scheduleSync hasta vincular la terminal.');
+
+  // --- 1c. La sesión de Supabase Auth persiste entre recargas ---
+  assert.strictEqual(clientOptions.auth.persistSession, true);
+  assert.strictEqual(clientOptions.auth.autoRefreshToken, true);
+  assert.strictEqual(clientOptions.auth.storageKey, 'nexobar-auth');
+  assert.strictEqual(clientOptions.auth.storage, globalThis.authStorage);
+  globalThis.authStorage.setItem('nexobar-auth', '{"access_token":"x"}');
+  assert.strictEqual(globalThis.authStorage.getItem('nexobar-auth'), '{"access_token":"x"}');
+  globalThis.authStorage.removeItem('nexobar-auth');
+  assert.strictEqual(globalThis.authStorage.getItem('nexobar-auth'), null);
+  console.log('   ✅ El cliente guarda y renueva la sesión en el almacenamiento propio (nexobar-auth).');
+
+  // --- 1d. Sin sesión no se consulta Supabase (evita caer a 'anon') ---
+  globalThis.state = { profile: { syncId: 'bar_900123' }, terminal: { businessId: 'bar_900123' } };
+  currentSession = null; remoteQueries = 0;
+  assert.strictEqual(await NexoSync.hasAuthSession(), false);
+  assert.strictEqual(await NexoSync.checkInitialConnection(), false);
+  assert.strictEqual(NexoSync.getStatus().status, 'auth');
+  assert.strictEqual(remoteQueries, 0);
+  currentSession = { access_token: 'jwt', user: { app_metadata: { business_id: 'bar_900123' } } };
+  assert.strictEqual(await NexoSync.hasAuthSession(), true);
+  assert.strictEqual(await NexoSync.checkInitialConnection(), true);
+  console.log('   ✅ Sin sesión no hay consultas como anon; con sesión la conexión se verifica.');
+
+  await NexoSync.signOutTerminal();
+  assert.strictEqual(signedOut, true);
+  assert.strictEqual(await NexoSync.hasAuthSession(), false);
+  console.log('   ✅ signOutTerminal cierra la sesión local.');
+
+  // --- 1e. negocios.activo controla el bloqueo por suscripción ---
+  let enforced = 0;
+  globalThis.enforceSubscription = () => { enforced++; };
+  currentSession = { access_token: 'jwt' };
+  negociosRow = { ...negociosRow, activo: false };
+  await NexoSync.pullAllFromSupabase('bar_900123');
+  assert.deepStrictEqual(globalThis.state.subscription.active, false);
+  assert.ok(enforced >= 1);
+  negociosRow = { ...negociosRow, activo: true };
+  await NexoSync.pullAllFromSupabase('bar_900123');
+  assert.strictEqual(globalThis.state.subscription.active, true);
+  NexoSync.applySubscriptionStatus(undefined); // columna ausente: no cambia nada
+  assert.strictEqual(globalThis.state.subscription.active, true);
+  delete globalThis.enforceSubscription; delete globalThis.state;
+  console.log('   ✅ activo=false suspende y activo=true reactiva; sin columna no se toca el estado.');
 
   // --- 2. ensureTerminalLinked / linkTerminal (extraídas de app.js) ---
   const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
