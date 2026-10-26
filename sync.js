@@ -175,6 +175,32 @@ function getClient() {
   return syncClient;
 }
 
+// Activación de terminal: valida las credenciales maestras en Supabase Auth y devuelve el negocio vinculado.
+// El business_id se lee SOLO de app_metadata (lo asigna el servidor); user_metadata lo puede editar el propio usuario.
+async function activateTerminal(email, password) {
+  if (isDemoMode()) return { ok: false, error: "El Modo Demo no se vincula a ningún negocio." };
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return { ok: false, error: "Necesitas conexión a internet para vincular esta caja." };
+  }
+  if (!hasSupabaseLib()) await loadSupabaseLib();
+  const sb = getClient();
+  if (!sb || !sb.auth) return { ok: false, error: "No se pudo conectar con el servidor de NexoBar. Revisa tu conexión." };
+  try {
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) {
+      const invalid = /invalid|credentials/i.test(error.message || "");
+      return { ok: false, error: invalid ? "Correo o contraseña incorrectos." : `No se pudo vincular: ${error.message}` };
+    }
+    const user = data?.user;
+    const bId = String(user?.app_metadata?.business_id || "").trim();
+    if (!bId) return { ok: false, error: "Esta cuenta no tiene un negocio asignado. Contacta a soporte NexoBar." };
+    return { ok: true, businessId: bId, email: user.email || email };
+  } catch (err) {
+    console.warn("[NexoSync] Error al activar terminal:", err);
+    return { ok: false, error: "No se pudo conectar con el servidor de NexoBar. Intenta de nuevo." };
+  }
+}
+
 // 2. Sanitizadores previos antes de cada upsert
 function sanitizeProducto(p, bId) {
   const inv = (typeof state !== "undefined" && state?.inventory?.find(i => i.id === p.inventoryId || i.id === `stock-${p.id}`)) || {};
@@ -413,7 +439,13 @@ async function checkInitialConnection() {
   }
 }
 
+// Terminal vinculada a un negocio (ver activación en app.js). Sin vínculo no se sube ni descarga nada.
+function isTerminalLinked() {
+  return typeof state !== "undefined" && Boolean(state?.terminal?.businessId);
+}
+
 function scheduleSync(delay = 1000) {
+  if (!isTerminalLinked()) return;
   clearTimeout(syncDebounceTimer);
   syncDebounceTimer = setTimeout(() => {
     syncAll().catch(() => {});
@@ -1998,6 +2030,12 @@ function init() {
     }
     return;
   }
+  // Sin terminal vinculada no arranca el ciclo. La llamada automática de DOMContentLoaded llega antes de que
+  // bootstrap() cargue el estado y se omite; bootstrap() vuelve a llamar a init() tras cargar/activar.
+  if (!isTerminalLinked()) {
+    updateIndicator("offline");
+    return;
+  }
   updateIndicator(typeof navigator !== "undefined" && navigator.onLine ? "syncing" : "offline");
 
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
@@ -2111,6 +2149,8 @@ const rootScope = typeof window !== "undefined" ? window : (typeof globalThis !=
 rootScope.NexoSync = {
   isDemoMode: () => globalThis.isDemoMode(),
   getClient,
+  activateTerminal,
+  isTerminalLinked,
   init,
   syncAll,
   syncData,

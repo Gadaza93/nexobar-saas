@@ -406,6 +406,30 @@
       <p id="loginHint" class="muted center"></p>
     </dialog>
 
+    <!-- Activación de terminal: bloquea el POS hasta vincular la caja a un negocio -->
+    <dialog id="activationDialog" class="small-dialog login-dialog activation-dialog" aria-labelledby="activationTitle">
+      <div class="login-brand activation-brand">
+        <span class="brand-mark"><img src="logo.png" alt="NexoBar" /></span>
+        <p class="eyebrow">NexoBar POS</p>
+        <h2 id="activationTitle">Vincular Terminal</h2>
+        <p class="muted">Ingresa las credenciales maestras de tu negocio para activar esta caja</p>
+      </div>
+      <form id="activationForm" class="activation-form" novalidate>
+        <label class="activation-field">
+          <span>Correo electrónico del establecimiento</span>
+          <input id="activationEmail" type="email" autocomplete="username" inputmode="email" placeholder="caja@tubar.com" required />
+        </label>
+        <label class="activation-field">
+          <span>Contraseña maestra</span>
+          <input id="activationPassword" type="password" autocomplete="current-password" placeholder="••••••••" required />
+        </label>
+        <p id="activationError" class="login-error activation-message" role="alert"></p>
+        <button id="activationSubmit" type="submit" class="primary-button activation-primary">Vincular y Descargar Catálogo</button>
+        <button id="activationDemo" type="button" class="outline-button activation-secondary">Probar Modo Demo</button>
+      </form>
+      <p class="muted center activation-foot">Esta vinculación se hace una sola vez por equipo. Después la caja funciona sin conexión.</p>
+    </dialog>
+
     <dialog id="sessionDialog" class="small-dialog">
       <div class="dialog-header"><div><p class="eyebrow" id="sessionRole">ROL</p><h2 id="sessionName">Usuario</h2></div><button class="icon-button" data-close="sessionDialog" aria-label="Cerrar">×</button></div>
       <div class="stack-buttons"><button id="changePinButton" class="outline-button full">Cambiar mi PIN</button><button id="logoutButton" class="primary-button full">Cerrar sesión</button></div>

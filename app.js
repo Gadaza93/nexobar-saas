@@ -2024,6 +2024,56 @@ document.addEventListener('change', e => { if (e.target.dataset.purchaseIndex !=
 document.querySelector('#productImage').addEventListener('change', event => { const file = event.target.files[0]; readLocalImage(file, image => { pendingProductImage = image; setImagePreview(document.querySelector('#productImagePreview'), image, '🍾'); }); });
 document.querySelector('#businessImage').addEventListener('change', event => { const file = event.target.files[0]; readLocalImage(file, image => { pendingBusinessImage = image; setImagePreview(document.querySelector('#profileImagePreview'), image, document.querySelector('#businessName').value || 'N'); }); });
 if ('serviceWorker' in navigator && !window.desktop) window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').then(reg => reg.update().catch(() => {})).catch(() => { }));
+/* ---------- Activación de terminal (SaaS multinegocio) ----------
+   Cada caja queda vinculada a un negocio (state.terminal.businessId, que también fija profile.syncId).
+   Viaja con el estado: IndexedDB, archivo espejo y respaldos. El Modo Demo nunca se vincula. */
+function linkTerminal(businessId, extra = {}) {
+  state.terminal = { ...extra, businessId, linkedAt: state.terminal?.linkedAt || Date.now() };
+  state.profile = { ...state.profile, syncId: businessId };
+  scheduleSave();
+}
+function ensureTerminalLinked(hasLocalData) {
+  if (state.terminal?.businessId) return true;
+  // Instalaciones anteriores a la activación: se respeta el negocio con el que ya venían trabajando
+  const syncId = String(state.profile?.syncId || '').trim();
+  if (hasLocalData || (syncId && syncId !== 'nexobar_default')) { linkTerminal(syncId || 'nexobar_default', { legacy: true }); return true; }
+  return false;
+}
+function showActivation() {
+  return new Promise(resolve => {
+    const dialog = document.querySelector('#activationDialog'), form = document.querySelector('#activationForm');
+    const submit = document.querySelector('#activationSubmit'), demo = document.querySelector('#activationDemo');
+    const emailInput = document.querySelector('#activationEmail'), passwordInput = document.querySelector('#activationPassword');
+    const setMessage = (text, info = false) => { const el = document.querySelector('#activationError'); el.textContent = text || ''; el.classList.toggle('is-info', info); };
+    const setBusy = busy => { submit.disabled = demo.disabled = busy; submit.textContent = busy ? 'Vinculando…' : 'Vincular y Descargar Catálogo'; };
+
+    dialog.addEventListener('cancel', e => e.preventDefault()); // no se puede cerrar con Escape
+    demo.addEventListener('click', () => { const url = new URL(location.href); url.searchParams.set('demo', 'true'); location.assign(url.href); });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const email = emailInput.value.trim().toLowerCase(), password = passwordInput.value;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setMessage('Escribe un correo electrónico válido.'); return emailInput.focus(); }
+      if (!password) { setMessage('Escribe la contraseña maestra.'); return passwordInput.focus(); }
+      setBusy(true); setMessage('Verificando credenciales…', true);
+      const result = globalThis.NexoSync?.activateTerminal ? await NexoSync.activateTerminal(email, password) : { ok: false, error: 'El módulo de sincronización no cargó. Recarga la app.' };
+      if (!result.ok) { setBusy(false); setMessage(result.error); return passwordInput.focus(); }
+
+      linkTerminal(result.businessId, { email: result.email });
+      setMessage('Descargando catálogo del negocio…', true);
+      let pulled = false;
+      try { pulled = Boolean((await NexoSync.pullAllFromSupabase(result.businessId))?.ok); } catch (e) { console.warn('[NexoSync] No se pudo descargar el catálogo:', e); }
+      state.profile.syncId = result.businessId; // la configuración remota no debe cambiar el negocio vinculado
+      cleanupOrphanOrders(); scheduleSave();
+
+      passwordInput.value = ''; setMessage(''); setBusy(false); dialog.close();
+      showToast(pulled ? 'Terminal vinculada. Catálogo descargado.' : 'Terminal vinculada. El catálogo se descargará al sincronizar.');
+      resolve();
+    });
+
+    dialog.showModal(); emailInput.focus();
+  });
+}
+
 async function bootstrap() {
   let saved;
   try { saved = await storageInit(); }
@@ -2061,8 +2111,12 @@ async function bootstrap() {
   scheduleSave();
   cleanupOrphanOrders();
 
+  // Terminal sin negocio vinculado: se bloquea el POS hasta activarla (la activación ya descarga el catálogo)
+  let justActivated = false;
+  if (!isDemoMode() && !ensureTerminalLinked(!isFreshLocal)) { await showActivation(); justActivated = true; }
+
   // Si hay conexión y NO estamos en Modo Demo, sincronizar con Supabase (descargar turno de caja y pedidos activos)
-  if (!isDemoMode() && typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase) {
+  if (!justActivated && !isDemoMode() && typeof navigator !== 'undefined' && navigator.onLine && globalThis.NexoSync?.pullAllFromSupabase) {
     try {
       const pullRes = await globalThis.NexoSync.pullAllFromSupabase();
       if (pullRes && pullRes.ok && pullRes.count > 0) {
