@@ -350,6 +350,23 @@ function localISO(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padSt
 function today() { return localISO(new Date()); }
 function displayDate() { return new Intl.DateTimeFormat('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date()).replace(/^./, c => c.toUpperCase()); }
 function getOrder(id) { return (state.orders || []).find(o => o.id === id); }
+
+/* ---------- Pedidos retirados (tumbas) ----------
+   Pedidos cobrados, eliminados o unidos en esta caja. mergeRemoteOrders (sync.js) los consulta para que una copia
+   remota desactualizada no resucite la mesa. Viajan con el estado (IndexedDB) y se purgan a los 3 días. */
+const REMOVED_ORDER_TTL = 3 * 24 * 3600 * 1000;
+function rememberRemovedOrder(orderId, at = Date.now()) {
+  if (!orderId || !state) return;
+  const map = state.deleted_order_ids && typeof state.deleted_order_ids === 'object' && !Array.isArray(state.deleted_order_ids) ? state.deleted_order_ids : {};
+  map[String(orderId)] = at;
+  Object.keys(map).forEach(id => { if (at - map[id] > REMOVED_ORDER_TTL) delete map[id]; });
+  state.deleted_order_ids = map;
+}
+function forgetRemovedOrder(orderId) { if (state?.deleted_order_ids) delete state.deleted_order_ids[String(orderId)]; }
+// Todo cambio local de un pedido queda pendiente de subir: mergeRemoteOrders no lo pisa con una copia remota más vieja
+function touchOrder(order) { if (!order) return; order.sync_status = 'pending'; order.updatedAt = Date.now(); }
+globalThis.rememberRemovedOrder = rememberRemovedOrder;
+globalThis.forgetRemovedOrder = forgetRemovedOrder;
 function isOrderOpen(order) {
   if (!order) return false;
   const st = String(order.status || '').toLowerCase();
@@ -409,7 +426,7 @@ function cleanupOrphanOrders() {
     if (!order) return false;
     const st = String(order.status || '').toLowerCase();
     const isPaid = (st === 'paid' || st === 'closed' || st === 'cerrada' || st === 'cancelada');
-    if (isPaid) return false;
+    if (isPaid) { if (!state.deleted_order_ids?.[order.id]) rememberRemovedOrder(order.id); return false; } // al limpiarlo, queda la tumba
     const hasItems = Array.isArray(order.items) && order.items.length > 0 && order.items.some(i => (Number(i.qty) || 0) > 0);
     if (!hasItems) return false;
     const isKnownTable = validTableIds.has(order.tableId);
@@ -770,7 +787,7 @@ function transferOrder(order, table) {
   // Un pedido vacío que se haya abierto en la mesa destino (sin productos) se descarta para no dejar dos pedidos en ella
   state.orders = state.orders.filter(o => o.id === order.id || o.tableId !== table.id || isOrderOpen(o) || String(o.status || '').toLowerCase() !== 'open');
   order.tableId = table.id; order.tableName = table.name;
-  order.sync_status = 'pending'; order.updatedAt = Date.now();
+  touchOrder(order);
   logAudit('Mesa trasladada', `${fromName} → ${table.name} · ${money.format(orderPending(order))}`);
   return { ok: true, mode: 'move', order };
 }
@@ -787,8 +804,9 @@ function mergeOrderInto(source, target) {
   target.paidAmount = (Number(target.paidAmount) || 0) + (Number(source.paidAmount) || 0); // cobros por productos ya hechos en cualquiera de las dos
   target.createdAt = Math.min(target.createdAt || Date.now(), source.createdAt || Date.now());
   target.mergedFrom = [...(target.mergedFrom || []), { orderId: source.id, tableName: source.tableName, amount: added, at: Date.now() }];
-  target.sync_status = 'pending'; target.updatedAt = Date.now();
+  touchOrder(target);
   state.orders = state.orders.filter(o => o.id !== source.id);
+  rememberRemovedOrder(source.id); // la cuenta de origen no debe volver desde la nube
   logAudit('Cuentas unidas', `${source.tableName} → ${target.tableName} · +${money.format(added)} · nuevo total ${money.format(orderTotal(target))}`, { data: { source: structuredClone(source) } });
   return { ok: true, mode: 'merge', order: target, removedId: source.id };
 }
@@ -1358,6 +1376,9 @@ function confirmPayment() {
       order.paidAt = Date.now();
     }
   }
+
+  touchOrder(order);
+  if (order.status === 'paid') rememberRemovedOrder(order.id); // una copia remota vieja no puede reabrir la mesa cobrada
 
   const primaryMethod = currentTenders.length === 1 ? currentTenders[0].method : currentTenders.map(t => t.method).join(' + ');
   const paidAt = Date.now();
@@ -2299,6 +2320,29 @@ globalThis.subscriptionInfo = subscriptionInfo;
 globalThis.enforceSubscription = enforceSubscription;
 globalThis.relinkTerminal = relinkTerminal;
 
+/* Sincronización al arrancar: PRIMERO se sube lo pendiente (ventas, pedidos, gastos…) y solo con la cola vacía se
+   descarga. Así una caja que trabajó sin internet nunca aplica antes una copia remota más vieja que sus cambios.
+   Si no hay nada pendiente no se sube nada: un equipo recién instalado no debe pisar el perfil ni los pedidos del
+   negocio en la nube con sus valores por defecto. Si la subida falla, no se descarga; el ciclo de NexoSync reintenta. */
+async function syncOnStartup() {
+  const sync = globalThis.NexoSync;
+  const queueEmpty = () => (sync.getPendingCount ? sync.getPendingCount() : 0) === 0 && !(state.orders || []).some(o => o.sync_status === 'pending');
+  let pushed = false;
+  if (!queueEmpty()) {
+    let res = null;
+    try { res = await sync.syncAll(); } catch (e) { console.warn('[NexoSync] Error subiendo cambios pendientes al arrancar:', e); }
+    if (!res || res.error || res.pedidos?.ok === false || !queueEmpty()) {
+      console.warn('[NexoSync] Quedan cambios sin subir: se omite la descarga inicial para no pisarlos.');
+      return { pushed: false, pulled: false };
+    }
+    pushed = true;
+  }
+  const pullRes = await sync.pullAllFromSupabase();
+  cleanupOrphanOrders();
+  return { pushed, pulled: Boolean(pullRes?.ok), count: Number(pullRes?.count) || 0 };
+}
+globalThis.syncOnStartup = syncOnStartup;
+
 async function bootstrap() {
   let saved;
   try { saved = await storageInit(); }
@@ -2347,13 +2391,10 @@ async function bootstrap() {
   if (canPull && !hasSession) setTimeout(() => showToast('La sesión de sincronización venció. Toca el indicador de sincronización para volver a vincular esta caja.'), 1500);
   if (hasSession) {
     try {
-      const pullRes = await globalThis.NexoSync.pullAllFromSupabase();
-      if (pullRes && pullRes.ok && pullRes.count > 0) {
-        console.log(`[NexoSync] Base local hidratada con éxito desde Supabase: ${pullRes.count} registros.`);
-      }
-      cleanupOrphanOrders();
+      const startup = await syncOnStartup();
+      if (startup.pulled && startup.count > 0) console.log(`[NexoSync] Base local hidratada con éxito desde Supabase: ${startup.count} registros.`);
     } catch (e) {
-      console.warn('[NexoSync] No se pudo descargar datos iniciales de Supabase:', e);
+      console.warn('[NexoSync] No se pudo sincronizar al arrancar:', e);
     }
   }
 

@@ -387,8 +387,24 @@ function confirmDeleteInvoice() {
     globalThis.NexoSync.deleteSale(payment.id);
   }
   state.payments = state.payments.filter(p => p.id !== payment.id);
+  const reopened = reopenSplitShare(payment);
   logAudit('Factura eliminada', `${payment.invoiceNo} · ${payment.customer || 'Venta mostrador'} · ${money.format(payment.amount)} · ${payment.method}${restore ? ' · inventario devuelto' : ''}`, { reason, data: structuredClone(payment) });
-  saveState(); invoiceToDelete = null; document.querySelector('#invoiceDeleteDialog').close(); renderAll(); showToast(`${payment.invoiceNo} eliminada.`);
+  saveState(); invoiceToDelete = null; document.querySelector('#invoiceDeleteDialog').close(); renderAll();
+  if (reopened && globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
+  showToast(reopened ? `${payment.invoiceNo} eliminada. ${reopened.parts.length === 1 ? `La parte ${reopened.parts[0]}` : `Las partes ${reopened.parts.join(', ')}`} de ${reopened.tableName} vuelve${reopened.parts.length === 1 ? '' : 'n'} a quedar pendiente${reopened.parts.length === 1 ? '' : 's'}: saldo ${money.format(reopened.pending)}.` : `${payment.invoiceNo} eliminada.`);
+}
+// Factura de una parte de un cobro en partes iguales con la mesa aún abierta: su cuota vuelve a quedar pendiente.
+// (Si la mesa ya se cerró, la factura se elimina como cualquier otra y la mesa no se reabre.)
+function reopenSplitShare(payment) {
+  const order = payment.splitShare && typeof getOrder === 'function' ? getOrder(payment.splitShare.orderId) : null;
+  if (!order?.equalSplit || typeof isOrderOpen !== 'function' || !isOrderOpen(order)) return null;
+  const paid = order.equalSplit.paid || [], parts = paid.filter(p => p.paymentId === payment.id).map(p => p.part);
+  if (!parts.length) return null;
+  order.equalSplit.paid = paid.filter(p => p.paymentId !== payment.id);
+  order.paidAmount = Math.max(0, (Number(order.paidAmount) || 0) - (Number(payment.amount) || 0));
+  if (!order.equalSplit.paid.length) delete order.equalSplit; // sin partes cobradas, la cuenta se puede volver a dividir libremente
+  if (typeof touchOrder === 'function') touchOrder(order);
+  return { parts, tableName: order.tableName, pending: orderPending(order) };
 }
 
 /* ============ Proveedores y costo promedio ============ */
@@ -656,7 +672,7 @@ function deleteCurrentOrder() {
   const order = getOrder(state.currentOrderId); if (!order) return;
   if (order.items.length && !window.confirm(`¿Eliminar el pedido de ${order.tableName} por ${money.format(orderTotal(order))}?`)) return;
   logAudit('Pedido eliminado', `${order.tableName} · ${money.format(orderTotal(order))} · ${order.items.length} productos`, { data: structuredClone(order) });
-  state.orders = state.orders.filter(o => o.id !== order.id); saveState(); if (globalThis.NexoSync?.deleteActiveOrder) globalThis.NexoSync.deleteActiveOrder(order.id).catch(() => {}); if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {}); document.querySelector('#orderDialog').close(); state.currentOrderId = null; renderAll(); showToast('Pedido eliminado.');
+  state.orders = state.orders.filter(o => o.id !== order.id); if (typeof rememberRemovedOrder === 'function') rememberRemovedOrder(order.id); saveState(); if (globalThis.NexoSync?.deleteActiveOrder) globalThis.NexoSync.deleteActiveOrder(order.id).catch(() => {}); if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {}); document.querySelector('#orderDialog').close(); state.currentOrderId = null; renderAll(); showToast('Pedido eliminado.');
 }
 
 /* ============ Reportes analíticos ============ */

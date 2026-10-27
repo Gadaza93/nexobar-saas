@@ -824,8 +824,19 @@ function mergeRemoteOrders(remoteOrders) {
     return Array.isArray(lo.items) && lo.items.length > 0 && lo.items.some(i => (Number(i.qty) || 0) > 0);
   });
 
+  // Pedidos retirados en esta caja (cobrados, eliminados o unidos): una copia remota nunca los resucita
+  const removedMap = (state.deleted_order_ids && typeof state.deleted_order_ids === "object") ? state.deleted_order_ids : {};
+  const removedKeys = new Set();
+  Object.keys(removedMap).forEach(id => { removedKeys.add(String(id)); const u = toValidUuid(id); if (u) removedKeys.add(u); });
+  const isRemovedLocally = ro => removedKeys.has(String(ro.id)) || removedKeys.has(toValidUuid(ro.id));
+  const isClosedOrder = o => ["paid", "closed", "cerrada", "cancelada"].includes(String(o?.status || "").toLowerCase());
+  // Prioridad offline: un cambio local aún no subido solo cede ante una versión remota POSTERIOR a ese cambio
+  const lastLocalChange = o => Math.max(Number(o.updatedAt) || 0, Number(o.paidAt) || 0, Number(o.createdAt) || 0);
+  const keepLocal = (lo, ro) => lo.sync_status === "pending" && !(Number(ro.updatedAt) > lastLocalChange(lo));
+
   const validRemoteOrders = (remoteOrders || []).filter(ro => {
     if (!ro || !ro.id) return false;
+    if (isRemovedLocally(ro)) return false;
     const st = String(ro.status || "").toLowerCase();
     const isPaid = st === "paid" || st === "closed" || st === "cerrada" || st === "cancelada";
     if (isPaid) return true;
@@ -844,6 +855,8 @@ function mergeRemoteOrders(remoteOrders) {
     const loUuid = toValidUuid(lo.id);
     const ro = remoteMap.get(String(lo.id)) || (loUuid ? remoteMap.get(loUuid) : null);
     if (ro) {
+      if (isClosedOrder(lo) && !isClosedOrder(ro)) return; // una mesa cobrada aquí nunca se reabre desde la nube
+      if (keepLocal(lo, ro)) return;                       // cambio local pendiente de subir: gana sobre la copia remota
       lo.status = ro.status || lo.status;
       if (Array.isArray(ro.items)) lo.items = ro.items;
       if (ro.note !== undefined) lo.note = ro.note;
@@ -851,6 +864,8 @@ function mergeRemoteOrders(remoteOrders) {
       if (ro.tableId) lo.tableId = ro.tableId;
       if (ro.paidAmount !== undefined) lo.paidAmount = ro.paidAmount;
       if (ro.paidAt !== undefined) lo.paidAt = ro.paidAt;
+      if (ro.equalSplit !== undefined) lo.equalSplit = ro.equalSplit; // cobro en partes de otra caja (configuracion.orders lo trae)
+      if (ro.updatedAt !== undefined) lo.updatedAt = ro.updatedAt;
       lo.sync_status = "synced";
     } else {
       if (lo.sync_status === "synced" && lo.status !== "paid") {
@@ -873,6 +888,7 @@ function mergeRemoteOrders(remoteOrders) {
     if (ro && ro.id && !alreadyExists) {
       const sameTableLocal = (!ro.isCustom && ro.tableId !== "walkin") ? state.orders.find(o => o.tableId === ro.tableId && !o.isCustom && o.status === "open") : null;
       if (sameTableLocal) {
+        if (keepLocal(sameTableLocal, ro)) return; // el pedido local de esa mesa tiene cambios sin subir
         sameTableLocal.items = ro.items || sameTableLocal.items;
         sameTableLocal.status = ro.status || sameTableLocal.status;
         sameTableLocal.sync_status = "synced";
