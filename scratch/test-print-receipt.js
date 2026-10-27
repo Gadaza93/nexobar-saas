@@ -154,6 +154,17 @@ const payment = {
     assert.match(src, /javascript: false/, `${file}: la ventana del ticket no debe ejecutar scripts`);
     assert.match(src, /printWin\.destroy\(\)/, `${file}: debe destruir la ventana temporal`);
   }
+  // Única excepción al bloqueo de ventanas: enlaces https://wa.me (botón de WhatsApp del cierre de turno)
+  for (const file of ['main.js', 'electron/main.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+    const fn = src.slice(src.indexOf('function isWhatsAppUrl('), src.indexOf('function createWindow('));
+    const wctx = { URL }; vm.createContext(wctx); vm.runInContext(fn, wctx);
+    assert.strictEqual(wctx.isWhatsAppUrl('https://wa.me/573001234567?text=Cierre'), true, `${file}: wa.me debe abrirse`);
+    for (const bad of ['https://evil.example/x', 'https://wa.me.evil.com/x', 'https://wa.me@evil.com/', 'http://wa.me/57300', 'javascript:alert(1)', 'no es url']) {
+      assert.strictEqual(wctx.isWhatsAppUrl(bad), false, `${file}: «${bad}» debe seguir bloqueada`);
+    }
+    assert.match(src, /setWindowOpenHandler\(\(\{ url \}\) => \{ if \(isWhatsAppUrl\(url\)\) shell\.openExternal\(url\); return \{ action: 'deny' \}; \}\)/, `${file}: la ventana principal debe seguir denegando`);
+  }
   for (const file of ['preload.js', 'electron/preload.js']) {
     assert.match(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), /printReceipt: \(html, silent = false, printerName = null\) => ipcRenderer\.invoke\('print:receipt'/, `${file}: falta printReceipt`);
   }
@@ -163,6 +174,7 @@ const payment = {
   const indexHtml = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(indexHtml.indexOf('src="./print.js"') < indexHtml.indexOf('src="./app.js"'), 'print.js debe cargarse antes de app.js');
   console.log('   ✅ IPC print:receipt en ambos main.js/preload.js; print.js en instalador, service worker e index.html.');
+  console.log('   ✅ Solo https://wa.me se abre fuera de la app; el resto de ventanas sigue bloqueado.');
 
   console.log('\n=== TODAS LAS PRUEBAS DE IMPRESIÓN PASARON ===');
   process.exit(0);

@@ -165,6 +165,11 @@ ipcMain.on('app:flushed', () => {
   if (win) win.close();
 });
 
+// Única excepción al bloqueo de ventanas: enlaces de WhatsApp (https://wa.me/...), abiertos fuera de la app
+function isWhatsAppUrl(url) {
+  try { const u = new URL(url); return u.protocol === 'https:' && u.hostname === 'wa.me'; } catch { return false; }
+}
+
 function createWindow() {
   const preloadPath = fs.existsSync(path.join(__dirname, 'preload.js'))
     ? path.join(__dirname, 'preload.js')
@@ -203,8 +208,8 @@ function createWindow() {
   });
 
   // Seguridad: evitar navegación externa o popups accidentales
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.webContents.on('will-navigate', event => event.preventDefault());
+  win.webContents.setWindowOpenHandler(({ url }) => { if (isWhatsAppUrl(url)) shell.openExternal(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (event, url) => { event.preventDefault(); if (isWhatsAppUrl(url)) shell.openExternal(url); });
 
   // Al cerrar la ventana, esperar hasta 4s para vaciar cualquier guardado en cola
   win.on('close', event => {

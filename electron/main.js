@@ -72,6 +72,11 @@ ipcMain.handle('print:listPrinters', async () => {
 });
 ipcMain.on('app:flushed', () => { flushed = true; if (win) win.close(); });
 
+// Única excepción al bloqueo de ventanas: enlaces de WhatsApp (https://wa.me/...), abiertos fuera de la app
+function isWhatsAppUrl(url) {
+  try { const u = new URL(url); return u.protocol === 'https:' && u.hostname === 'wa.me'; } catch { return false; }
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1366, height: 820, minWidth: 1024, minHeight: 640, show: false, backgroundColor: '#181A20', title: 'NexoBar', icon: path.join(__dirname, '..', 'build', 'icon.png'),
@@ -79,8 +84,8 @@ function createWindow() {
   });
   Menu.setApplicationMenu(null);
   win.once('ready-to-show', () => { win.maximize(); win.show(); });
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.webContents.on('will-navigate', event => event.preventDefault());
+  win.webContents.setWindowOpenHandler(({ url }) => { if (isWhatsAppUrl(url)) shell.openExternal(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (event, url) => { event.preventDefault(); if (isWhatsAppUrl(url)) shell.openExternal(url); });
   win.on('close', event => { // antes de cerrar, la app termina de guardar sus datos (máx. 4 s)
     if (flushed) return; event.preventDefault();
     win.webContents.send('app:flush'); setTimeout(() => { flushed = true; if (win) win.close(); }, 4000);
