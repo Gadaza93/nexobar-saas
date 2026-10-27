@@ -808,7 +808,107 @@ function renderReports() {
     ['TOTAL BAJAS AUDITADAS', `<strong>${formatQty(totalBajasQty)} und · ${money.format(totalBajasCost)} costo (${money.format(totalBajasSale)} venta)</strong>`]
   ];
   $('#stockReport').innerHTML = rowList(stockRows);
+  applyReportTab();
 }
+
+/* ============ Utilidad neta ============
+   Ventas netas − costo de ventas = utilidad bruta; − gastos (caja menor de los turnos + fijos y generales) = utilidad neta.
+   Las facturas anuladas se eliminan de state.payments, así que no entran. Los abonos de una cuenta dividida en partes
+   iguales no duplican la venta: cada abono suma su importe (sin costo) y la factura que salda la cuenta lleva una línea de
+   ajuste negativa por esos abonos, de modo que la suma de importes es exactamente el total de la cuenta. Las compras de
+   mercancía no se restan como gasto porque su costo ya entra en el costo de ventas. */
+let reportTab = 'summary', netRange = 'month', netFrom = '', netTo = '';
+const NET_EXPENSE_GROUPS = ['Arriendo', 'Servicios', 'Personal / DJ', 'Insumos / caja menor', 'Otros'];
+function netBounds() {
+  const end = today(), base = parseISO(end);
+  if (netRange === 'today') return { from: end, to: end };
+  if (netRange === 'week') { const start = new Date(base); start.setDate(start.getDate() - (start.getDay() + 6) % 7); return { from: localISO(start), to: end }; } // semana de lunes a hoy
+  if (netRange === 'month') return { from: localISO(new Date(base.getFullYear(), base.getMonth(), 1)), to: end };
+  if (netRange === 'lastMonth') return { from: localISO(new Date(base.getFullYear(), base.getMonth() - 1, 1)), to: localISO(new Date(base.getFullYear(), base.getMonth(), 0)) };
+  let from = netFrom || netTo || end, to = netTo || from; if (from > to) [from, to] = [to, from];
+  return { from, to };
+}
+// Clasifica primero por el tipo de gasto; si es genérico, por la descripción. Un gasto genérico pagado en efectivo desde la caja de un turno es caja menor.
+function expenseGroup(expense) {
+  const classify = text => {
+    const s = String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (/arriendo|alquiler|canon|\brenta\b/.test(s)) return 'Arriendo';
+    if (/nomina|personal|\bdj\b|musica|musico|salario|sueldo|honorario|prestacion|seguridad social|pago de turno|turnos? de|mesero|bartender|vigilan/.test(s)) return 'Personal / DJ';
+    if (/servicio|\bluz\b|energia|\bagua\b|acueducto|alcantarillado|\bgas\b|internet|telefon|celular|\bplan\b|television|\btv\b/.test(s)) return 'Servicios';
+    if (/insumo|caja menor|transporte|domicilio|mantenimiento|reparacion|aseo|limpieza|hielo|desechable|papeleria|ferreteria/.test(s)) return 'Insumos / caja menor';
+    return '';
+  };
+  return classify(expense.category) || classify(expense.description) || (expense.method === 'Efectivo' && expense.shiftId ? 'Insumos / caja menor' : 'Otros');
+}
+function netProfitDataset(from, to) {
+  const payments = paymentsBetween(from, to), m = paymentMetrics(payments), groups = {};
+  let expenses = 0, fromDrawer = 0, count = 0;
+  // Un solo recorrido sobre los gastos; la fecha ISO (AAAA-MM-DD) se compara como texto, sin crear objetos Date
+  for (const e of state.expenses) {
+    if (!(e.date >= from && e.date <= to)) continue;
+    const amount = Number(e.amount) || 0, key = expenseGroup(e), g = groups[key] || (groups[key] = { total: 0, items: [] });
+    g.total += amount; g.items.push(e); expenses += amount; count++;
+    if (e.method === 'Efectivo' && e.shiftId) fromDrawer += amount;
+  }
+  const net = m.profit - expenses;
+  return { from, to, payments, sales: m.total, invoices: m.count, cogs: m.cost, gross: m.profit, grossMargin: m.margin, expenses, expenseCount: count, fromDrawer, groups, net, netMargin: m.total ? net / m.total * 100 : 0 };
+}
+function applyReportTab() {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll('[data-report-tab]').forEach(b => { const on = b.dataset.reportTab === reportTab; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)); });
+  const summary = document.querySelector('#reportSummaryPanel'), net = document.querySelector('#netProfitPanel');
+  if (summary) summary.hidden = reportTab !== 'summary';
+  if (net) net.hidden = reportTab !== 'net';
+  if (reportTab === 'net') renderNetProfit();
+}
+function renderNetProfit() {
+  const $ = s => document.querySelector(s); if (!$('#netProfitPanel')) return;
+  const { from, to } = netBounds(), d = netProfitDataset(from, to), pct = v => `${v.toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+  document.querySelectorAll('[data-net-range]').forEach(b => b.classList.toggle('active', b.dataset.netRange === netRange));
+  $('#netCustomRange').hidden = netRange !== 'custom';
+  $('#netFrom').max = $('#netTo').max = today();
+  if (netRange === 'custom') { $('#netFrom').value = from; $('#netTo').value = to; }
+  $('#netRangeLabel').textContent = from === to ? `Período: ${shortDate(from, true)}` : `Período: ${shortDate(from)} – ${shortDate(to, true)}`;
+
+  $('#netSales').textContent = money.format(d.sales);
+  $('#netSalesNote').textContent = `${d.invoices} ${d.invoices === 1 ? 'factura cobrada' : 'facturas cobradas'}`;
+  $('#netCogs').textContent = money.format(d.cogs);
+  $('#netCogsNote').textContent = `Utilidad bruta ${money.format(d.gross)} · ${pct(d.grossMargin)}`;
+  $('#netExpenses').textContent = money.format(d.expenses);
+  $('#netExpensesNote').textContent = `${d.expenseCount} ${d.expenseCount === 1 ? 'registro' : 'registros'}`;
+  const tone = !d.sales && !d.expenses ? 'flat' : d.net >= 0 ? 'gain' : 'loss';
+  ['#netProfitCard', '#netMarginCard'].forEach(id => { $(id).classList.toggle('is-gain', tone === 'gain'); $(id).classList.toggle('is-loss', tone === 'loss'); });
+  $('#netProfit').textContent = `${d.net < 0 ? '−' : ''}${money.format(Math.abs(d.net))}`;
+  $('#netProfitNote').textContent = tone === 'flat' ? 'Sin movimientos' : tone === 'gain' ? 'Ganancia del período' : 'Pérdida del período';
+  $('#netMargin').textContent = d.sales ? pct(d.netMargin) : '—';
+  $('#netMarginNote').textContent = d.sales ? 'Sobre ventas netas' : 'Sin ventas en el período';
+
+  $('#netWaterfall').innerHTML = rowList([
+    ['Ventas netas', money.format(d.sales)],
+    ['(−) Costo de ventas', `− ${money.format(d.cogs)}`],
+    ['<strong>= Utilidad bruta</strong>', `${money.format(d.gross)} <small class="muted">· ${pct(d.grossMargin)}</small>`],
+    ...NET_EXPENSE_GROUPS.filter(k => d.groups[k]).map(k => [`(−) ${escapeHtml(k)}`, `− ${money.format(d.groups[k].total)}`]),
+    ['(−) Total gastos', `− ${money.format(d.expenses)}`],
+    [`<strong>= Utilidad neta</strong>`, `<span class="net-figure ${tone}">${d.net < 0 ? '−' : ''}${money.format(Math.abs(d.net))}</span>`],
+    ['Margen neto', d.sales ? `<span class="net-figure ${tone}">${pct(d.netMargin)}</span>` : '—'],
+  ]);
+  const verdict = $('#netVerdict');
+  verdict.className = `net-verdict ${tone}`;
+  verdict.textContent = tone === 'flat' ? 'No hay ventas ni gastos registrados en este período.'
+    : tone === 'gain' ? `El negocio ganó ${money.format(d.net)} después de pagar mercancía y gastos.`
+    : `Pérdida neta de ${money.format(Math.abs(d.net))}: los gastos superan la utilidad bruta del período.`;
+
+  const groups = NET_EXPENSE_GROUPS.filter(k => d.groups[k]).sort((a, b) => d.groups[b].total - d.groups[a].total), max = groups.length ? d.groups[groups[0]].total || 1 : 1;
+  $('#netExpenseGroups').innerHTML = groups.length ? groups.map(k => {
+    const g = d.groups[k], items = g.items.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
+    const share = d.expenses ? g.total / d.expenses * 100 : 0;
+    return `<details class="net-group"><summary><span class="net-group-name">${escapeHtml(k)} <small class="muted">· ${g.items.length} · ${share.toFixed(0)}%</small></span><b>${money.format(g.total)}</b><span class="chart-track"><span class="chart-fill" style="width:${Math.max(4, g.total / max * 100)}%"></span></span></summary>`
+      + `<div class="net-group-items">${items.map(e => `<div class="report-row"><span>${escapeHtml(shortDate(e.date))} · ${escapeHtml(e.description || e.category || 'Gasto')} <small class="muted">· ${escapeHtml(e.category || '')}${e.method ? ' · ' + escapeHtml(e.method) : ''}</small></span><b>${money.format(Number(e.amount) || 0)}</b></div>`).join('')}</div></details>`;
+  }).join('') + (d.fromDrawer ? `<p class="muted net-drawer-note">${money.format(d.fromDrawer)} de estos gastos salieron del efectivo de caja de los turnos.</p>` : '')
+    : '<p class="muted">No hay gastos registrados en este período.</p>';
+}
+globalThis.renderNetProfit = renderNetProfit;
+globalThis.netProfitDataset = netProfitDataset;
 
 /* ---------- Exportar a Excel (.xlsx real, sin librerías) ---------- */
 const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -925,6 +1025,8 @@ function handleModuleClick(event) {
   if (d.removeInvLine !== undefined) { invoiceDraft.items.splice(Number(d.removeInvLine), 1); return renderInvoiceDraft(); }
   if (d.editSupplier) return openSupplierDialog(d.editSupplier);
   if (d.deleteSupplier) return deleteSupplier(d.deleteSupplier);
+  if (d.reportTab) { reportTab = d.reportTab; return applyReportTab(); }
+  if (d.netRange) { if (d.netRange === 'custom' && !netFrom) ({ from: netFrom, to: netTo } = netBounds()); netRange = d.netRange; return renderNetProfit(); } // el personalizado arranca con el rango que se estaba viendo
   const actions = {
     loginBackButton: () => { loginTarget = null; loginPin = ''; setLoginError(''); renderLogin(); }, userChip: openSessionDialog, logoutButton: showLogin, changePinButton: () => openPinDialog(false), savePinButton: savePin,
     newUserButton: () => openUserDialog(), saveUserButton: saveUser, saveInvoiceButton: saveInvoiceEdit, invoiceAddButton: addInvoiceLine, invoiceAddTender: () => { if (!invoiceDraft) return; invoiceDraft.tenders.push({ method: 'Nequi', amount: 0 }); renderInvoiceTenders(); }, confirmDeleteInvoiceButton: confirmDeleteInvoice,
@@ -958,6 +1060,7 @@ function handleModuleChange(event) {
   if (t.dataset.invTender !== undefined && t.dataset.invTenderField === 'method' && invoiceDraft) { const tender = invoiceDraft.tenders[Number(t.dataset.invTender)]; if (tender) tender.method = t.value; }
   if (t.id === 'wasteItem') updateWasteValue();
   if (t.id === 'invoiceDate') { invoiceFilter.date = t.value || 'all'; renderInvoices(); }
+  if ((t.id === 'netFrom' || t.id === 'netTo') && t.value) { if (t.id === 'netFrom') netFrom = t.value; else netTo = t.value; netRange = 'custom'; renderNetProfit(); }
   if (t.id === 'invoiceMethod') { invoiceFilter.method = t.value; renderInvoices(); }
   if (t.id === 'backupOnClose' || t.id === 'backupDaily') { if (!can('backup')) { renderBackupCard(); return deny(); } const s = backupSettings(); s[t.id === 'backupOnClose' ? 'onClose' : 'daily'] = t.checked; saveState(); showToast('Preferencia de respaldo guardada.'); }
 }

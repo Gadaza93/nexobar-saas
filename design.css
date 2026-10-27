@@ -1486,3 +1486,35 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 .move-table-btn.is-blocked { border-style: dashed; border-color: var(--danger); background: var(--danger-soft); }
 .move-table-btn:hover { transform: translateY(-1px); }
 @media (max-width: 768px) { .order-move-btn { padding: 0 10px; font-size: 12px; } }
+
+/* ---------- Reportes: sub-pestañas y Utilidad neta ---------- */
+.report-subtabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+.report-subtab { padding: 10px 16px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 13px; font-weight: 700; cursor: pointer; margin-bottom: -1px; }
+.report-subtab:hover { color: var(--text); }
+.report-subtab.active { color: var(--accent-ink); border-bottom-color: var(--accent); }
+.net-custom-range { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.net-range-label { margin: -4px 0 12px; font-size: 12px; }
+.net-kpis .stat-card strong { font-size: 24px; }
+.net-result.is-gain strong { color: var(--success); }
+.net-result.is-loss strong { color: var(--danger); }
+.net-result.is-gain { background: linear-gradient(135deg, var(--success-soft), transparent 75%); }
+.net-result.is-loss { background: linear-gradient(135deg, var(--danger-soft), transparent 75%); }
+.net-figure.gain { color: var(--success); }
+.net-figure.loss { color: var(--danger); }
+.net-verdict { margin: 12px 0 0; padding: 10px 12px; border-radius: var(--r-sm); font-size: 13px; font-weight: 600; background: var(--surface-2); color: var(--muted); }
+.net-verdict.gain { background: var(--success-soft); color: var(--success); }
+.net-verdict.loss { background: var(--danger-soft); color: var(--danger); }
+.net-groups { display: grid; gap: 8px; }
+.net-group { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); }
+.net-group summary { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; padding: 10px 12px; cursor: pointer; list-style: none; font-size: 13px; }
+.net-group summary::-webkit-details-marker { display: none; }
+.net-group-name::before { content: '▸'; display: inline-block; width: 14px; color: var(--muted); }
+.net-group[open] .net-group-name::before { content: '▾'; }
+.net-group summary .chart-track { grid-column: 1 / -1; display: block; height: 6px; }
+.net-group summary .chart-fill { display: block; height: 100%; }
+.net-group-items { display: grid; gap: 6px; padding: 4px 12px 12px; border-top: 1px solid var(--line); }
+.net-group-items .report-row { gap: 10px; padding-top: 6px; }
+.net-group-items .report-row span { min-width: 0; overflow-wrap: anywhere; }
+.net-drawer-note { margin: 4px 0 0; font-size: 12px; }
+@media (max-width: 1100px) { .net-kpis.stats-grid { grid-auto-flow: row; grid-template-columns: repeat(3, 1fr); } .net-kpis .stat-card + .stat-card { border-left: 0; } .net-kpis .stat-card { border-top: 1px solid var(--line); } .net-kpis .stat-card:nth-child(-n+3) { border-top: 0; } .net-kpis .stat-card:not(:nth-child(3n+1)) { border-left: 1px solid var(--line); } }
+@media (max-width: 768px) { .net-kpis.stats-grid { grid-template-columns: 1fr 1fr; } .net-kpis .stat-card:nth-child(n) { border-left: 0; border-top: 1px solid var(--line); } .net-kpis .stat-card:nth-child(-n+2) { border-top: 0; } .net-kpis .stat-card:nth-child(even) { border-left: 1px solid var(--line); } .net-kpis .stat-card:last-child { grid-column: 1 / -1; } .report-subtab { flex: 1; } }

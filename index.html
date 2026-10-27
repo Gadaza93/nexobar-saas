@@ -192,6 +192,33 @@
           <p id="printHeader" class="print-header"></p>
           <div id="reportWatermarkTop" class="demo-watermark-bar demo-watermark-top" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
           <div class="section-heading"><div><h2 id="reportHeading">Resumen de hoy</h2><p id="reportSubheading">Datos generados desde este dispositivo.</p></div><div class="inline-actions report-actions"><button id="exportXlsxButton" class="outline-button">Exportar Excel</button><button id="printReportButton" class="outline-button">Imprimir / PDF</button><button id="closeShiftButton" class="primary-button" data-perm="shift">Cerrar turno</button></div></div>
+          <div class="report-subtabs" role="tablist" aria-label="Secciones de reportes">
+            <button type="button" class="report-subtab active" role="tab" aria-selected="true" data-report-tab="summary">Resumen</button>
+            <button type="button" class="report-subtab" role="tab" aria-selected="false" data-report-tab="net">Utilidad neta</button>
+          </div>
+          <div id="netProfitPanel" class="net-profit-panel" hidden>
+            <div class="report-filters" id="netFilters">
+              <button class="filter-chip" data-net-range="today">Hoy</button>
+              <button class="filter-chip" data-net-range="week">Esta semana</button>
+              <button class="filter-chip active" data-net-range="month">Este mes</button>
+              <button class="filter-chip" data-net-range="lastMonth">Mes pasado</button>
+              <button class="filter-chip" data-net-range="custom">Personalizado</button>
+              <span id="netCustomRange" class="net-custom-range" hidden><label class="filter-date"><span>Desde</span><input type="date" id="netFrom" aria-label="Fecha inicial" /></label><label class="filter-date"><span>Hasta</span><input type="date" id="netTo" aria-label="Fecha final" /></label></span>
+            </div>
+            <p class="muted net-range-label" id="netRangeLabel"></p>
+            <div class="stats-grid net-kpis">
+              <article class="stat-card"><span>Ventas totales</span><strong id="netSales">$0</strong><small id="netSalesNote">0 facturas</small></article>
+              <article class="stat-card"><span>Costo mercancía</span><strong id="netCogs">$0</strong><small id="netCogsNote">Costo de lo vendido</small></article>
+              <article class="stat-card"><span>Gastos totales</span><strong id="netExpenses">$0</strong><small id="netExpensesNote">0 registros</small></article>
+              <article class="stat-card net-result" id="netProfitCard"><span>Utilidad neta</span><strong id="netProfit">$0</strong><small id="netProfitNote">Sin movimientos</small></article>
+              <article class="stat-card net-result" id="netMarginCard"><span>Margen neto</span><strong id="netMargin">0,0%</strong><small id="netMarginNote">Sobre ventas netas</small></article>
+            </div>
+            <div class="report-layout">
+              <article class="data-card"><h3>Cascada de utilidad</h3><div id="netWaterfall" class="report-list"></div><p id="netVerdict" class="net-verdict"></p></article>
+              <article class="data-card"><h3>Gastos por categoría</h3><p class="muted">Gastos de caja menor de los turnos y gastos fijos/generales del período. Las compras de mercancía no se suman aquí: ya están en el costo de ventas.</p><div id="netExpenseGroups" class="net-groups"></div></article>
+            </div>
+          </div>
+          <div id="reportSummaryPanel">
           <div class="report-filters" id="reportFilters">
             <button class="filter-chip active" data-report-range="today">Hoy</button>
             <button class="filter-chip" data-report-range="7">7 días</button>
@@ -217,6 +244,7 @@
           </div>
           <div class="section-heading history-heading"><div><h2>Historial de movimientos</h2><p>Facturas, compras, gastos y cierres registrados en este dispositivo.</p></div></div>
           <div id="historyList" class="history-list"></div>
+          </div>
           <div id="reportWatermarkBottom" class="demo-watermark-bar demo-watermark-bottom" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
           <p id="printFooter" class="print-footer" hidden></p>
         </section>
@@ -374,7 +402,7 @@
 
     <dialog id="expenseDialog" class="small-dialog">
       <div class="dialog-header"><div><p class="eyebrow">EGRESO</p><h2>Registrar gasto</h2></div><button class="icon-button" data-close="expenseDialog" aria-label="Cerrar">×</button></div>
-      <label class="field-label" for="expenseCategory">Tipo de gasto</label><select id="expenseCategory"><option>Servicios públicos</option><option>Arriendo</option><option>Nómina</option><option>Transporte</option><option>Marketing</option><option>Mantenimiento</option><option>Otros gastos</option></select>
+      <label class="field-label" for="expenseCategory">Tipo de gasto</label><select id="expenseCategory"><option>Servicios públicos</option><option>Arriendo</option><option>Nómina</option><option>Transporte</option><option>Marketing</option><option>Mantenimiento</option><option>Personal / DJ</option><option>Insumos / caja menor</option><option>Otros gastos</option></select>
       <label class="field-label" for="expenseDescription">Descripción</label><input id="expenseDescription" type="text" placeholder="Ej. Pago de energía eléctrica" />
       <div class="two-fields"><div><label class="field-label" for="expenseAmount">Valor pagado</label><input id="expenseAmount" type="number" min="0" inputmode="numeric" placeholder="$0" /></div><div><label class="field-label" for="expenseMethod">Medio de pago</label><select id="expenseMethod"><option>Efectivo</option><option>Transferencia</option><option>Tarjeta</option><option>Nequi</option></select></div></div>
       <label class="field-label" for="expenseDate">Fecha</label><input id="expenseDate" type="date" />
