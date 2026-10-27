@@ -54,6 +54,70 @@ function escapeAdminHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 
+/* ---------- Alta de negocio ---------- */
+const PLAN_LABELS = { pro: 'PRO', basico: 'BÁSICO' };
+const planLabel = plan => PLAN_LABELS[String(plan || '').toLowerCase()] || String(plan || '—').toUpperCase();
+const NEGOCIO_ID_RE = /^[a-z0-9_]{3,40}$/;
+// Palabras genéricas del tipo de local que no aportan al ID: «Gastrobar La Estación» → bar_la_estacion
+const GENERIC_VENUE_WORDS = /^(?:(?:gastro)?bar|restobar|pub|taberna|cantina|discoteca|licorera|estadero)_+/;
+function slugifyNegocioId(nombre) {
+  const base = String(nombre || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (!base) return '';
+  const core = base.replace(GENERIC_VENUE_WORDS, '') || base;
+  return `bar_${core}`.slice(0, 40).replace(/_+$/, '');
+}
+// Sin caracteres ambiguos (0/O, 1/l/I) para dictarla o copiarla sin errores; siempre con mayúscula, minúscula y número
+const PASSWORD_SETS = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnpqrstuvwxyz', '23456789'];
+function randomIndex(max, rng) {
+  if (rng) return Math.floor(rng() * max);
+  const limit = 256 - (256 % max), buf = new Uint8Array(1);
+  do { globalThis.crypto.getRandomValues(buf); } while (buf[0] >= limit); // sin sesgo de módulo
+  return buf[0] % max;
+}
+function generatePassword(length = 8, rng) {
+  const all = PASSWORD_SETS.join('');
+  const chars = PASSWORD_SETS.map(set => set[randomIndex(set.length, rng)]);
+  while (chars.length < length) chars.push(all[randomIndex(all.length, rng)]);
+  for (let i = chars.length - 1; i > 0; i--) { const j = randomIndex(i + 1, rng); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+  return chars.join('');
+}
+// Valida el formulario y arma los parámetros de admin_create_negocio
+function buildCreatePayload({ nombre, negocioId, email, password, plan, dias }) {
+  const p_nombre = String(nombre || '').trim(), p_id = String(negocioId || '').trim().toLowerCase();
+  const p_email = String(email || '').trim().toLowerCase(), p_password = String(password || '');
+  const p_plan = String(plan || '').toLowerCase(), p_dias_vigencia = Number(dias);
+  if (p_nombre.length < 2) return { ok: false, field: 'nombre', error: 'Escribe el nombre del bar.' };
+  if (!NEGOCIO_ID_RE.test(p_id)) return { ok: false, field: 'id', error: 'El ID debe tener entre 3 y 40 caracteres: minúsculas, números o guion bajo.' };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p_email)) return { ok: false, field: 'email', error: 'Escribe un correo electrónico válido.' };
+  if (p_password.length < 8 || /\s/.test(p_password)) return { ok: false, field: 'password', error: 'La contraseña debe tener al menos 8 caracteres y sin espacios.' };
+  if (!PLAN_LABELS[p_plan]) return { ok: false, field: 'plan', error: 'Elige un plan válido.' };
+  if (!Number.isInteger(p_dias_vigencia) || p_dias_vigencia < 1 || p_dias_vigencia > 3650) return { ok: false, field: 'dias', error: 'Los días de vigencia deben ser un número entero entre 1 y 3650.' };
+  return { ok: true, payload: { p_id, p_nombre, p_email, p_password, p_plan, p_dias_vigencia } };
+}
+// Mensaje claro para los errores típicos de la RPC (correo duplicado, ID ocupado)
+function describeCreateError(error) {
+  const text = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
+  const duplicate = /duplicate|already|ya existe|ya está|registrad|en uso|unique|23505/.test(text) || error?.code === '23505';
+  if (/already registered|users_email/.test(text) || (duplicate && /correo|email/.test(text))) return 'Ya existe una cuenta con ese correo. Usa otro correo para la terminal.';
+  if (duplicate) return 'Ese ID de negocio ya está en uso. Elige otro.';
+  if (error?.code === '42501' || /permission denied|no autorizado|not authorized/.test(text)) return 'Tu sesión no tiene permisos de SuperAdmin para crear negocios.';
+  return `No se pudo crear el negocio: ${error?.message || 'error desconocido'}`;
+}
+// Texto listo para pegar en WhatsApp
+function credentialsText({ p_nombre, p_id, p_email, p_password, p_plan, p_dias_vigencia }) {
+  return [
+    `¡Bienvenido a NexoBar POS, ${p_nombre}!`,
+    '',
+    'Datos para vincular tu caja (pantalla «Vincular Terminal»):',
+    `• Correo: ${p_email}`,
+    `• Contraseña: ${p_password}`,
+    '',
+    `Plan ${planLabel(p_plan)} · Vigencia inicial: ${p_dias_vigencia} ${p_dias_vigencia === 1 ? 'día' : 'días'}`,
+    `ID de negocio: ${p_id}`
+  ].join('\n');
+}
+
 /* ---------- Supabase ---------- */
 async function adminSignIn(email, password) {
   const sb = getAdminClient();
@@ -75,6 +139,15 @@ async function fetchNegocios() {
 async function updateNegocio(negocio, options) {
   const { error } = await getAdminClient().rpc('admin_update_negocio_status', statusPayload(negocio, options));
   if (error) throw new Error(error.message || 'Error al actualizar el negocio');
+}
+async function createNegocio(payload) {
+  try {
+    const { data, error } = await getAdminClient().rpc('admin_create_negocio', payload);
+    if (error) return { ok: false, error: describeCreateError(error) };
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: 'No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.' };
+  }
 }
 
 /* ---------- Interfaz ---------- */
@@ -121,7 +194,7 @@ function renderNegocios() {
     return `<tr class="${active ? '' : 'is-suspended-row'}">
       <td><code class="admin-id">${id}</code></td>
       <td><strong>${escapeAdminHtml(n.nombre || 'Sin nombre')}</strong></td>
-      <td><span class="admin-plan">${escapeAdminHtml(n.plan || '—')}</span></td>
+      <td><span class="admin-plan">${escapeAdminHtml(planLabel(n.plan))}</span></td>
       <td class="num">${fmtInt.format(Number(n.total_productos) || 0)}</td>
       <td class="num">${fmtInt.format(Number(n.total_ventas) || 0)}</td>
       <td><span class="admin-expiry is-${exp.tone}">${escapeAdminHtml(exp.label)}${exp.note ? `<small>${escapeAdminHtml(exp.note)}</small>` : ''}</span></td>
@@ -165,6 +238,55 @@ async function applyNegocioChange(id, kind) {
   }
 }
 
+/* ---------- Modal de alta ---------- */
+let lastCreated = null; // credenciales del último alta, solo mientras está abierta la confirmación
+function openNegocioDialog() {
+  const form = $('#negocioForm'); form.reset();
+  $('#negocioId').dataset.touched = ''; $('#negocioDias').value = '30';
+  $('#negocioPassword').value = generatePassword();
+  $('#negocioFormError').textContent = '';
+  $('#negocioDialog').showModal(); $('#negocioNombre').focus();
+}
+function closeNegocioDialog() { const dialog = $('#negocioDialog'); if (dialog.open) dialog.close(); $('#negocioPassword').value = ''; }
+async function handleNegocioSubmit(event) {
+  event.preventDefault();
+  const errorEl = $('#negocioFormError'), submit = $('#negocioSubmit');
+  const check = buildCreatePayload({ nombre: $('#negocioNombre').value, negocioId: $('#negocioId').value, email: $('#negocioEmail').value, password: $('#negocioPassword').value, plan: $('#negocioPlan').value, dias: $('#negocioDias').value });
+  const fieldInputs = { nombre: '#negocioNombre', id: '#negocioId', email: '#negocioEmail', password: '#negocioPassword', plan: '#negocioPlan', dias: '#negocioDias' };
+  if (!check.ok) { errorEl.textContent = check.error; $(fieldInputs[check.field])?.focus(); return; }
+  submit.disabled = true; submit.textContent = 'Creando…'; errorEl.textContent = '';
+  const result = await createNegocio(check.payload);
+  submit.disabled = false; submit.textContent = 'Crear y Activar Negocio';
+  if (!result.ok) { errorEl.textContent = result.error; return; } // el modal sigue abierto para corregir
+  closeNegocioDialog();
+  showCreatedDialog(check.payload);
+  adminToast(`«${check.payload.p_nombre}» creado y activo.`);
+  loadNegocios({ quiet: true });
+}
+function showCreatedDialog(payload) {
+  lastCreated = payload;
+  const rows = [['Bar', payload.p_nombre], ['ID de negocio', payload.p_id], ['Correo', payload.p_email], ['Contraseña', payload.p_password, true], ['Plan', planLabel(payload.p_plan)], ['Vigencia', `${payload.p_dias_vigencia} días`]];
+  $('#negocioCreatedSummary').innerHTML = rows.map(([label, value, secret]) => `<dt>${escapeAdminHtml(label)}</dt><dd${secret ? ' class="is-secret"' : ''}>${escapeAdminHtml(value)}</dd>`).join('');
+  $('#negocioCopyStatus').textContent = '';
+  $('#negocioCreatedDialog').showModal(); $('#negocioCopyCredentials').focus();
+}
+function closeCreatedDialog() {
+  const dialog = $('#negocioCreatedDialog'); if (dialog.open) dialog.close();
+  lastCreated = null; $('#negocioCreatedSummary').innerHTML = ''; // la contraseña no queda en la página
+}
+async function copyToClipboard(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* sin permiso: método clásico */ }
+  const area = document.createElement('textarea'); area.value = text; area.setAttribute('readonly', ''); area.style.position = 'fixed'; area.style.opacity = '0';
+  $('#negocioCreatedDialog').appendChild(area); area.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch { ok = false; }
+  area.remove(); return ok;
+}
+async function handleCopyCredentials() {
+  if (!lastCreated) return;
+  const ok = await copyToClipboard(credentialsText(lastCreated));
+  $('#negocioCopyStatus').textContent = ok ? '✅ Credenciales copiadas. Pégalas en WhatsApp para enviarlas al cliente.' : '⚠ No se pudo copiar automáticamente. Selecciona y copia los datos manualmente.';
+}
+
 async function handleLoginSubmit(event) {
   event.preventDefault();
   const email = $('#adminEmail').value.trim().toLowerCase(), password = $('#adminPassword').value;
@@ -187,6 +309,16 @@ async function initAdmin() {
   $('#adminLoginForm').addEventListener('submit', handleLoginSubmit);
   $('#adminLogout').addEventListener('click', handleLogout);
   $('#adminRefresh').addEventListener('click', () => loadNegocios());
+  $('#adminNewNegocio').addEventListener('click', openNegocioDialog);
+  $('#negocioForm').addEventListener('submit', handleNegocioSubmit);
+  $('#negocioNombre').addEventListener('input', () => { if (!$('#negocioId').dataset.touched) $('#negocioId').value = slugifyNegocioId($('#negocioNombre').value); });
+  $('#negocioId').addEventListener('input', event => { event.target.dataset.touched = event.target.value ? '1' : ''; }); // vacío: vuelve a sugerir
+  $('#negocioGeneratePassword').addEventListener('click', () => { $('#negocioPassword').value = generatePassword(); $('#negocioPassword').focus(); });
+  $('#negocioCopyCredentials').addEventListener('click', handleCopyCredentials);
+  document.querySelectorAll('[data-close-negocio]').forEach(btn => btn.addEventListener('click', closeNegocioDialog));
+  document.querySelectorAll('[data-close-created]').forEach(btn => btn.addEventListener('click', closeCreatedDialog));
+  $('#negocioDialog').addEventListener('cancel', () => { $('#negocioPassword').value = ''; });
+  $('#negocioCreatedDialog').addEventListener('close', closeCreatedDialog);
   $('#negociosBody').addEventListener('click', event => {
     const button = event.target.closest('button[data-action]'); if (!button) return;
     if (button.dataset.action === 'reload') return loadNegocios();
@@ -211,5 +343,5 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initAdmin); else initAdmin();
 }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isSuperadmin, computeMetrics, expiryInfo, statusPayload, escapeAdminHtml, adminSignIn, fetchNegocios, updateNegocio, NOT_SUPERADMIN, EXTEND_DAYS };
+  module.exports = { isSuperadmin, computeMetrics, expiryInfo, statusPayload, escapeAdminHtml, adminSignIn, fetchNegocios, updateNegocio, NOT_SUPERADMIN, EXTEND_DAYS, slugifyNegocioId, generatePassword, buildCreatePayload, describeCreateError, credentialsText, createNegocio, planLabel };
 }

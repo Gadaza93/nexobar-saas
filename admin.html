@@ -54,6 +54,7 @@
         </div>
         <div class="admin-header-actions">
           <span id="adminWho" class="admin-who muted"></span>
+          <button id="adminNewNegocio" type="button" class="primary-button">+ Nuevo Negocio</button>
           <button id="adminRefresh" type="button" class="outline-button">Actualizar</button>
           <button id="adminLogout" type="button" class="outline-button">Cerrar sesión</button>
         </div>
@@ -92,6 +93,66 @@
         </section>
       </main>
     </div>
+
+    <!-- Alta rápida de un negocio (RPC admin_create_negocio) -->
+    <dialog id="negocioDialog" class="small-dialog admin-dialog" aria-labelledby="negocioDialogTitle">
+      <div class="dialog-header">
+        <div><p class="eyebrow">Alta de cliente</p><h2 id="negocioDialogTitle">Nuevo negocio</h2></div>
+        <button type="button" class="icon-button" data-close-negocio aria-label="Cerrar">×</button>
+      </div>
+      <form id="negocioForm" class="activation-form" novalidate>
+        <label class="activation-field">
+          <span>Nombre del bar</span>
+          <input id="negocioNombre" type="text" maxlength="80" placeholder="Ej: Gastrobar La Estación" autocomplete="off" required />
+        </label>
+        <label class="activation-field">
+          <span>ID de negocio</span>
+          <input id="negocioId" type="text" maxlength="40" placeholder="bar_la_estacion" autocomplete="off" spellcheck="false" required />
+          <small class="admin-hint">Se sugiere a partir del nombre. Solo minúsculas, números y guion bajo; no se puede cambiar después.</small>
+        </label>
+        <label class="activation-field">
+          <span>Correo para la terminal</span>
+          <input id="negocioEmail" type="email" inputmode="email" placeholder="laestacion@bar.com" autocomplete="off" required />
+        </label>
+        <label class="activation-field">
+          <span>Contraseña inicial</span>
+          <span class="admin-input-row">
+            <input id="negocioPassword" type="text" minlength="8" placeholder="Mínimo 8 caracteres" autocomplete="new-password" spellcheck="false" required />
+            <button id="negocioGeneratePassword" type="button" class="outline-button admin-small" title="Generar una contraseña segura de 8 caracteres">🎲 Generar</button>
+          </span>
+        </label>
+        <div class="admin-two-fields">
+          <label class="activation-field">
+            <span>Plan</span>
+            <select id="negocioPlan"><option value="pro">PRO</option><option value="basico">BÁSICO</option></select>
+          </label>
+          <label class="activation-field">
+            <span>Días de vigencia inicial</span>
+            <input id="negocioDias" type="number" min="1" max="3650" step="1" value="30" inputmode="numeric" required />
+          </label>
+        </div>
+        <p id="negocioFormError" class="login-error activation-message" role="alert"></p>
+        <div class="admin-dialog-actions">
+          <button type="button" class="outline-button" data-close-negocio>Cancelar</button>
+          <button id="negocioSubmit" type="submit" class="primary-button">Crear y Activar Negocio</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Confirmación con las credenciales para enviar al cliente -->
+    <dialog id="negocioCreatedDialog" class="small-dialog admin-dialog" aria-labelledby="negocioCreatedTitle">
+      <div class="dialog-header">
+        <div><p class="eyebrow">Negocio creado</p><h2 id="negocioCreatedTitle">Listo para vincular</h2></div>
+        <button type="button" class="icon-button" data-close-created aria-label="Cerrar">×</button>
+      </div>
+      <p class="muted admin-created-intro">Envía estas credenciales al cliente para que active su caja en «Vincular Terminal».</p>
+      <dl id="negocioCreatedSummary" class="admin-credentials"></dl>
+      <p id="negocioCopyStatus" class="admin-hint" role="status"></p>
+      <div class="admin-dialog-actions">
+        <button type="button" class="outline-button" data-close-created>Cerrar</button>
+        <button id="negocioCopyCredentials" type="button" class="primary-button">📋 Copiar credenciales</button>
+      </div>
+    </dialog>
 
     <div id="toast" class="toast" role="status"></div>
     <script src="./admin.js"></script>

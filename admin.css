@@ -75,3 +75,33 @@
   .admin-main { padding: 18px 16px 36px; }
   .admin-login-card { padding: 26px 18px 20px; }
 }
+
+/* ---------- Alta de negocio (modales) ---------- */
+.admin-dialog { width: min(520px, 94vw); text-align: left; }
+.admin-dialog::backdrop { background: rgba(4, 7, 12, 0.72); backdrop-filter: blur(4px); }
+.admin-dialog .dialog-header h2 { margin: 2px 0 0; font-family: var(--font-display); font-size: 21px; }
+.admin-dialog .eyebrow { margin: 0; color: var(--accent); letter-spacing: .08em; }
+.admin-dialog .activation-field input, .admin-dialog .activation-field select { width: 100%; min-height: 44px; padding: 0 12px; font-size: 14px; border-radius: var(--r-sm); }
+.admin-input-row { display: flex; gap: 8px; align-items: stretch; }
+.admin-input-row input { flex: 1; min-width: 0; font-family: ui-monospace, Consolas, monospace; letter-spacing: .04em; }
+.admin-input-row .admin-small { min-height: 44px; }
+.admin-two-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.admin-hint { margin: 0; font-size: 11px; font-weight: 500; color: var(--muted); }
+.admin-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+.admin-dialog-actions .primary-button, .admin-dialog-actions .outline-button { padding: 0 18px; }
+.admin-dialog-actions button:disabled { opacity: .6; cursor: progress; }
+.admin-created-intro { margin: 0 0 14px; font-size: 13px; }
+.admin-credentials { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0 0 12px; padding: 14px 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-sm); font-size: 13px; }
+.admin-credentials dt { color: var(--muted); font-weight: 600; }
+.admin-credentials dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+.admin-credentials dd.is-secret { font-family: ui-monospace, Consolas, monospace; color: var(--accent-ink); letter-spacing: .04em; }
+.admin-header .primary-button { padding: 0 16px; }
+@media (max-width: 768px) {
+  .admin-two-fields { grid-template-columns: 1fr; }
+  .admin-dialog-actions { flex-direction: column-reverse; }
+  .admin-dialog-actions button { width: 100%; }
+}
+/* styles.css da margin-bottom a los campos de .small-dialog (modales del POS); aquí el espaciado lo pone el grid */
+.admin-dialog input, .admin-dialog select { margin-bottom: 0; }
+.admin-input-row { align-items: center; }
+.admin-input-row .admin-small { height: 44px; padding: 0 14px; }

@@ -79,6 +79,59 @@ const admin = require('../admin.js');
   assert.strictEqual(admin.escapeAdminHtml('<img src=x onerror=1>'), '&lt;img src=x onerror=1&gt;');
   console.log('   ✅ Nombres de negocio escapados antes de pintarlos.');
 
+  // --- 4. Alta de negocio (admin_create_negocio) ---
+  assert.strictEqual(admin.slugifyNegocioId('Gastrobar La Estación'), 'bar_la_estacion');
+  assert.strictEqual(admin.slugifyNegocioId('Bar Central'), 'bar_central');
+  assert.strictEqual(admin.slugifyNegocioId('El Rincón de Ñoño #2'), 'bar_el_rincon_de_nono_2');
+  assert.strictEqual(admin.slugifyNegocioId('Bar'), 'bar_bar');
+  assert.strictEqual(admin.slugifyNegocioId('   '), '');
+  assert.ok(admin.slugifyNegocioId('x'.repeat(80)).length <= 40);
+  console.log('   ✅ ID sugerido: «Gastrobar La Estación» → bar_la_estacion (sin tildes ni símbolos).');
+
+  for (let i = 0; i < 200; i++) {
+    const pwd = admin.generatePassword();
+    assert.strictEqual(pwd.length, 8);
+    assert.match(pwd, /[A-Z]/); assert.match(pwd, /[a-z]/); assert.match(pwd, /[2-9]/);
+    assert.doesNotMatch(pwd, /[0O1lI\s]/);
+  }
+  assert.notStrictEqual(admin.generatePassword(), admin.generatePassword());
+  console.log('   ✅ Contraseña generada: 8 caracteres, mayúscula + minúscula + número, sin caracteres ambiguos.');
+
+  const form = { nombre: ' Gastrobar La Estación ', negocioId: 'bar_la_estacion', email: ' LaEstacion@Bar.com ', password: 'Ab3kP9xq', plan: 'pro', dias: '30' };
+  const built = admin.buildCreatePayload(form);
+  assert.deepStrictEqual(built, { ok: true, payload: { p_id: 'bar_la_estacion', p_nombre: 'Gastrobar La Estación', p_email: 'laestacion@bar.com', p_password: 'Ab3kP9xq', p_plan: 'pro', p_dias_vigencia: 30 } });
+  assert.strictEqual(admin.buildCreatePayload({ ...form, negocioId: 'Bar La-Estación' }).field, 'id');
+  assert.strictEqual(admin.buildCreatePayload({ ...form, email: 'sin-arroba' }).field, 'email');
+  assert.strictEqual(admin.buildCreatePayload({ ...form, password: 'corta' }).field, 'password');
+  assert.strictEqual(admin.buildCreatePayload({ ...form, plan: 'gold' }).field, 'plan');
+  assert.strictEqual(admin.buildCreatePayload({ ...form, dias: '0' }).field, 'dias');
+  assert.strictEqual(admin.buildCreatePayload({ ...form, dias: '2.5' }).field, 'dias');
+  assert.strictEqual(admin.buildCreatePayload({ ...form, plan: 'basico' }).payload.p_plan, 'basico');
+  console.log('   ✅ Validación del formulario: ID, correo, contraseña, plan y días.');
+
+  rpcCalls = []; rpcResult = { data: { id: 'bar_la_estacion' }, error: null };
+  let created = await admin.createNegocio(built.payload);
+  assert.strictEqual(created.ok, true);
+  assert.deepStrictEqual(rpcCalls, [{ name: 'admin_create_negocio', params: { p_id: 'bar_la_estacion', p_nombre: 'Gastrobar La Estación', p_email: 'laestacion@bar.com', p_password: 'Ab3kP9xq', p_plan: 'pro', p_dias_vigencia: 30 } }]);
+  console.log('   ✅ admin_create_negocio recibe p_id, p_nombre, p_email, p_password, p_plan y p_dias_vigencia.');
+
+  rpcResult = { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "users_email_partial_key"' } };
+  assert.strictEqual((await admin.createNegocio(built.payload)).error, 'Ya existe una cuenta con ese correo. Usa otro correo para la terminal.');
+  rpcResult = { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "negocios_pkey"', details: 'Key (id)=(bar_la_estacion) already exists.' } };
+  assert.strictEqual((await admin.createNegocio(built.payload)).error, 'Ese ID de negocio ya está en uso. Elige otro.');
+  rpcResult = { data: null, error: { code: '42501', message: 'permission denied for function admin_create_negocio' } };
+  assert.match((await admin.createNegocio(built.payload)).error, /permisos de SuperAdmin/);
+  rpcResult = { data: null, error: { code: 'P0001', message: 'invalid email format' } };
+  assert.strictEqual((await admin.createNegocio(built.payload)).error, 'No se pudo crear el negocio: invalid email format');
+  console.log('   ✅ Errores claros: correo duplicado, ID ocupado, sin permisos y otros mensajes de la RPC.');
+
+  const text = admin.credentialsText(built.payload);
+  assert.match(text, /Correo: laestacion@bar\.com/);
+  assert.match(text, /Contraseña: Ab3kP9xq/);
+  assert.match(text, /Plan PRO · Vigencia inicial: 30 días/);
+  assert.strictEqual(admin.planLabel('basico'), 'BÁSICO');
+  console.log('   ✅ «Copiar credenciales» arma el texto listo para WhatsApp.');
+
   console.log('\n=== TODAS LAS PRUEBAS DEL PANEL SUPERADMIN PASARON ===');
   process.exit(0);
 })().catch(err => { console.error('❌', err); process.exit(1); });
