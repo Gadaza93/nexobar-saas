@@ -114,6 +114,11 @@ const toValidISOString = toIsoDate;
 
 function getBusinessId() {
   try {
+    // Terminal vinculada: su negocio manda siempre (el ID de «Mi negocio» queda bloqueado y no puede desviarlo)
+    if (typeof state !== "undefined" && state?.terminal?.businessId && !isDemoMode()) {
+      const linked = String(state.terminal.businessId).trim();
+      if (linked) return linked;
+    }
     if (typeof state !== "undefined" && state?.profile?.syncId) {
       const id = String(state.profile.syncId).trim();
       if (id) return id;

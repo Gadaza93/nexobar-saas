@@ -69,9 +69,14 @@ for (const file of mainFiles) {
     /Math\.random\(\)/.test(printHandler) && !/flag:\s*'wx'|mkdtemp|randomUUID|randomBytes/.test(printHandler));
   check('Electron', 'Media', `${file}: impresión sin tiempo límite (si el controlador nunca responde, la ventana oculta y la petición IPC quedan colgadas)`,
     !/setTimeout|timeout/i.test(printHandler));
-  check('Electron', 'Baja', `${file}: el canal print:receipt no valida el remitente (event.senderFrame)`, !/senderFrame|sender\.id|event\.sender/.test(printHandler));
-  check('Electron', 'Alta', `${file}: shell.openExternal fuera de la regla isWhatsAppUrl`,
-    (src.match(/shell\.openExternal\(/g) || []).length !== (src.match(/isWhatsAppUrl\(url\)\) shell\.openExternal\(url\)/g) || []).length);
+  const senderGuard = /function fromMainWindow|const fromMainWindow = event =>[^\n]*event\.sender === win\.webContents/.test(src) && /if \(!fromMainWindow\(event\)\)/.test(printHandler);
+  check('Electron', 'Baja', `${file}: el canal print:receipt no valida el remitente (solo la ventana principal puede imprimir)`, !senderGuard && !/senderFrame|sender\.id|event\.sender/.test(printHandler));
+  // Invariante: openExternal solo dentro de openWhatsApp (o tras isWhatsAppUrl en la misma línea), y openWhatsApp solo tras isWhatsAppUrl
+  const externalCalls = src.split('\n').filter(l => /shell\.openExternal\(/.test(l));
+  const unguardedExternal = externalCalls.filter(l => !/^function openWhatsApp\(/.test(l.trim()) && !/isWhatsAppUrl\(url\)\) shell\.openExternal\(/.test(l));
+  const unguardedOpenWa = src.split('\n').filter(l => /openWhatsApp\(/.test(l) && !/^function openWhatsApp\(/.test(l.trim()) && !/isWhatsAppUrl\(url\)\) openWhatsApp\(url\)/.test(l));
+  check('Electron', 'Alta', `${file}: shell.openExternal fuera de la regla isWhatsAppUrl`, unguardedExternal.length > 0 || unguardedOpenWa.length > 0,
+    [...unguardedExternal, ...unguardedOpenWa].map(l => l.trim().slice(0, 80)).join(' | '));
   // isWhatsAppUrl con URLs adversarias
   const fnSrc = src.slice(src.indexOf('function isWhatsAppUrl('), src.indexOf('function createWindow('));
   const wctx = { URL }; vm.createContext(wctx); vm.runInContext(fnSrc, wctx);
@@ -207,8 +212,10 @@ check('Finanzas', 'Alta', 'Abono con monto negativo es rechazado', fin.get('curr
 fin.run('confirmPayment(); can = () => true; logAudit = () => {}; openInvoiceEdit(state.payments[0].id); invoiceDraft.items[0].price = -6000; document.querySelector("#invoiceReason").value = "x prueba"; saveInvoiceEdit();');
 check('Finanzas', 'Alta', 'Corrección de factura con precio negativo es rechazada', fin.get('state.payments[0].amount < 0'));
 const importSrc = read('import-products.js');
-check('Finanzas', 'Baja', 'Importación Excel: acepta productos con precio $0 y existencias negativas (el formulario manual los rechaza)',
-  /Math\.max\(0, parseMoneyOrNumber\(row\[colMap\.price\]/.test(importSrc) && /const rawStock = [^;]*parseMoneyOrNumber\(row\[colMap\.stock\], 0\) : 0;/.test(importSrc));
+check('Finanzas', 'Baja', 'Importación Excel: rechaza precio $0 y nunca deja existencias negativas (mismas reglas que el formulario manual)',
+  !/if \(!\(price > 0\)\)/.test(importSrc) || /adjustNegative/.test(importSrc) || !/Math\.max\(0, Number\(item\.stock\)/.test(importSrc));
+fin.run(`freshState(); document.querySelector('#countedCash').value = '-20000'; confirmClose();`);
+check('Finanzas', 'Baja', 'Cierre de caja con efectivo contado negativo (-$20.000) es rechazado', fin.get('state.cashShift.status') !== 'open', `estado del turno tras el intento: ${fin.get('state.cashShift.status')}`);
 
 // 3.5 Carreras de sincronización: una copia remota desactualizada pisa cambios locales pendientes de subir
 const races = [];
@@ -255,8 +262,13 @@ asyncChecks.push(async () => {
 // 3.6 ID de sincronización editable después de vincular la terminal
 fin.run(`freshState(); state.terminal = { businessId: 'bar_central_01' }; state.profile.syncId = 'bar_central_01'; can = () => true;
   document.querySelector('#businessName').value = 'Bar'; document.querySelector('#businessSyncId').value = 'bar_norte_02'; saveProfile();`);
-check('Supabase', 'Media', '«Mi negocio» permite cambiar el ID de sincronización de una terminal vinculada (diverge de terminal.businessId)',
-  fin.get('state.profile.syncId') !== fin.get('state.terminal.businessId'), `syncId=${fin.get('state.profile.syncId')} vs terminal=${fin.get('state.terminal.businessId')}`);
+fin.run(`renderProfile();`);
+const syncLocked = fin.run(`document.querySelector('#businessSyncId').readOnly`);
+fin.run(`state.profile.syncId = 'bar_norte_02';`); // aunque algo forzara otro ID en el perfil…
+const usedId = fin.get('getBusinessId()');
+check('Supabase', 'Media', '«Mi negocio» no permite cambiar el ID de sincronización de una terminal vinculada y getBusinessId() usa siempre terminal.businessId',
+  fin.get('state.terminal.businessId') !== 'bar_central_01' || !syncLocked || usedId !== 'bar_central_01',
+  `campo bloqueado: ${syncLocked} · getBusinessId(): ${usedId} · terminal: bar_central_01`);
 
 /* =====================================================================================
    4. XSS: cadenas maliciosas en todos los datos que escribe el usuario o llegan de la nube

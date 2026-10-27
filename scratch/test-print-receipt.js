@@ -163,7 +163,8 @@ const payment = {
     for (const bad of ['https://evil.example/x', 'https://wa.me.evil.com/x', 'https://wa.me@evil.com/', 'http://wa.me/57300', 'javascript:alert(1)', 'no es url']) {
       assert.strictEqual(wctx.isWhatsAppUrl(bad), false, `${file}: «${bad}» debe seguir bloqueada`);
     }
-    assert.match(src, /setWindowOpenHandler\(\(\{ url \}\) => \{ if \(isWhatsAppUrl\(url\)\) shell\.openExternal\(url\); return \{ action: 'deny' \}; \}\)/, `${file}: la ventana principal debe seguir denegando`);
+    assert.match(src, /setWindowOpenHandler\(\(\{ url \}\) => \{ if \(isWhatsAppUrl\(url\)\) openWhatsApp\(url\); return \{ action: 'deny' \}; \}\)/, `${file}: la ventana principal debe seguir denegando`);
+    assert.match(src, /function openWhatsApp\(url\) \{ shell\.openExternal\(new URL\(url\)\.href\); \}/, `${file}: WhatsApp se abre con la URL normalizada`);
   }
   for (const file of ['preload.js', 'electron/preload.js']) {
     assert.match(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), /printReceipt: \(html, silent = false, printerName = null\) => ipcRenderer\.invoke\('print:receipt'/, `${file}: falta printReceipt`);

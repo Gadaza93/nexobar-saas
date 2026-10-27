@@ -8,6 +8,8 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 
 // Control de instancia única (evita abrir dos cajas simultáneas en la misma máquina)
 const gotLock = app.requestSingleInstanceLock();
@@ -123,35 +125,50 @@ ipcMain.handle('app:info', () => ({
 }));
 
 // Impresión de tickets: ventana oculta temporal con el HTML del comprobante.
-// El HTML va a un archivo temporal (un logo en data URL puede superar el límite de URL de Chromium).
-ipcMain.handle('print:receipt', async (_event, html, options = {}) => {
+// - Solo la ventana principal del POS puede pedirla (ni la ventana de impresión ni otra).
+// - Archivo temporal con nombre aleatorio criptográfico y creación exclusiva ('wx': nunca sobrescribe ni sigue un enlace);
+//   va a un archivo y no a una data: URL porque un logo grande supera el límite de URL de Chromium.
+// - Tiempo límite: si el controlador o la impresora no responden, se destruye la ventana y se responde con error.
+//   Con diálogo del sistema el plazo es mayor: la persona puede tardar eligiendo impresora.
+const PRINT_TIMEOUT_SILENT_MS = 30 * 1000, PRINT_TIMEOUT_DIALOG_MS = 3 * 60 * 1000;
+const fromMainWindow = event => Boolean(win) && !win.isDestroyed() && event.sender === win.webContents;
+ipcMain.handle('print:receipt', async (event, html, options = {}) => {
+  if (!fromMainWindow(event)) return { ok: false, error: 'Origen de impresión no autorizado.' };
   if (typeof html !== 'string' || !html || html.length > 8 * 1024 * 1024) return { ok: false, error: 'Contenido de impresión no válido.' };
   const silent = Boolean(options && options.silent);
   const deviceName = options && typeof options.printerName === 'string' ? options.printerName.trim() : '';
-  const tmpFile = path.join(app.getPath('temp'), `nexobar-ticket-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
-  let printWin = null;
+  const limitMs = silent ? PRINT_TIMEOUT_SILENT_MS : PRINT_TIMEOUT_DIALOG_MS;
+  const tmpFile = path.join(app.getPath('temp'), `nexobar-ticket-${crypto.randomUUID()}.html`);
+  let printWin = null, timer = null;
   try {
-    fs.writeFileSync(tmpFile, html, 'utf8');
+    fs.writeFileSync(tmpFile, html, { encoding: 'utf8', flag: 'wx' });
     printWin = new BrowserWindow({ show: false, width: 420, height: 900, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false } });
     printWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    printWin.webContents.on('will-navigate', event => event.preventDefault());
-    await printWin.loadFile(tmpFile);
-    return await new Promise(resolve => {
-      printWin.webContents.print({ silent, printBackground: true, margins: { marginType: 'none' }, ...(deviceName ? { deviceName } : {}) }, (success, failureReason) => {
-        const cancelled = !success && /cancel/i.test(String(failureReason || ''));
-        resolve({ ok: success, cancelled, error: success || cancelled ? null : String(failureReason || 'Error de impresión') });
+    printWin.webContents.on('will-navigate', navEvent => navEvent.preventDefault());
+    const printing = (async () => {
+      await printWin.loadFile(tmpFile);
+      return await new Promise(resolve => {
+        printWin.webContents.print({ silent, printBackground: true, margins: { marginType: 'none' }, ...(deviceName ? { deviceName } : {}) }, (success, failureReason) => {
+          const cancelled = !success && /cancel/i.test(String(failureReason || ''));
+          resolve({ ok: success, cancelled, error: success || cancelled ? null : String(failureReason || 'Error de impresión') });
+        });
       });
+    })();
+    const timeout = new Promise(resolve => {
+      timer = setTimeout(() => resolve({ ok: false, timedOut: true, error: `La impresora no respondió en ${Math.round(limitMs / 1000)} s.` }), limitMs);
     });
+    return await Promise.race([printing, timeout]);
   } catch (error) {
     return { ok: false, error: String(error.message || error) };
   } finally {
+    clearTimeout(timer);
     if (printWin && !printWin.isDestroyed()) printWin.destroy();
     fs.unlink(tmpFile, () => {});
   }
 });
 
-ipcMain.handle('print:listPrinters', async () => {
-  if (!win) return [];
+ipcMain.handle('print:listPrinters', async event => {
+  if (!fromMainWindow(event)) return [];
   try {
     const printers = await win.webContents.getPrintersAsync();
     return printers.map(p => ({ name: p.name, displayName: p.displayName || p.name, isDefault: Boolean(p.isDefault) }));
@@ -165,9 +182,26 @@ ipcMain.on('app:flushed', () => {
   if (win) win.close();
 });
 
+const INDEX_HTML = path.join(__dirname, 'index.html');
 // Única excepción al bloqueo de ventanas: enlaces de WhatsApp (https://wa.me/...), abiertos fuera de la app
 function isWhatsAppUrl(url) {
   try { const u = new URL(url); return u.protocol === 'https:' && u.hostname === 'wa.me'; } catch { return false; }
+}
+// Se abre la URL ya normalizada por el parser WHATWG, no la cadena original
+function openWhatsApp(url) { shell.openExternal(new URL(url).href); }
+// Única navegación permitida dentro de la ventana: recargar la propia index.html entrando al Modo Demo (?demo=true)
+// o volviendo a producción (sin parámetros). El modo demo se decide por la URL en cada carga (demo-mode.js).
+function isDemoToggle(url) {
+  try {
+    const target = new URL(url), own = pathToFileURL(INDEX_HTML);
+    return target.protocol === 'file:' && decodeURIComponent(target.pathname).toLowerCase() === decodeURIComponent(own.pathname).toLowerCase()
+      && (target.search === '' || target.search === '?demo=true');
+  } catch { return false; }
+}
+// Ningún permiso de hardware para el renderer (cámara, micrófono, ubicación, notificaciones…): el POS no los usa
+function denyAllPermissions(ses) {
+  ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  ses.setPermissionCheckHandler(() => false);
 }
 
 function createWindow() {
@@ -208,8 +242,9 @@ function createWindow() {
   });
 
   // Seguridad: evitar navegación externa o popups accidentales
-  win.webContents.setWindowOpenHandler(({ url }) => { if (isWhatsAppUrl(url)) shell.openExternal(url); return { action: 'deny' }; });
-  win.webContents.on('will-navigate', (event, url) => { event.preventDefault(); if (isWhatsAppUrl(url)) shell.openExternal(url); });
+  win.webContents.setWindowOpenHandler(({ url }) => { if (isWhatsAppUrl(url)) openWhatsApp(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (event, url) => { if (isDemoToggle(url)) return; event.preventDefault(); if (isWhatsAppUrl(url)) openWhatsApp(url); });
+  denyAllPermissions(win.webContents.session);
 
   // Al cerrar la ventana, esperar hasta 4s para vaciar cualquier guardado en cola
   win.on('close', event => {

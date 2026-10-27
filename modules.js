@@ -120,7 +120,7 @@ function renderLogin() {
   document.querySelector('#loginTitle').textContent = 'NexoBar';
   const active = state.users.filter(u => u.active !== false), target = state.users.find(u => u.id === loginTarget);
   document.querySelector('#loginUsers').hidden = !!target; document.querySelector('#loginPinBox').hidden = !target;
-  document.querySelector('#loginUsers').innerHTML = active.map(u => `<button class="login-user" data-login-user="${u.id}"><span class="mini-avatar">${escapeHtml(initials(u.name))}</span><strong>${escapeHtml(u.name)}</strong><small>${ROLE_LABELS[u.role] || u.role}</small></button>`).join('');
+  document.querySelector('#loginUsers').innerHTML = active.map(u => `<button class="login-user" data-login-user="${u.id}"><span class="mini-avatar">${escapeHtml(initials(u.name))}</span><strong>${escapeHtml(u.name)}</strong><small>${escapeHtml(ROLE_LABELS[u.role] || u.role)}</small></button>`).join('');
   document.querySelector('#loginWho').textContent = target ? target.name : '';
   document.querySelectorAll('#pinDots i').forEach((dot, index) => dot.classList.toggle('filled', index < loginPin.length));
   const firstRun = state.users.find(u => u.mustChangePin && u.role === 'admin');
@@ -170,7 +170,7 @@ function savePin() {
 /* ---------- Equipo y bitácora ---------- */
 function renderTeam() {
   if (!can('view.team')) return;
-  document.querySelector('#teamTable').innerHTML = state.users.map(u => `<tr><td><strong>${escapeHtml(u.name)}</strong></td><td>${ROLE_LABELS[u.role] || u.role}</td><td><span class="status ${u.active === false ? 'low' : 'good'}">${u.active === false ? 'Inactivo' : 'Activo'}</span></td><td>${u.lastLogin ? fmtDateTime(u.lastLogin) : '—'}</td><td><button class="mini-action" data-edit-user="${u.id}">Editar</button></td></tr>`).join('');
+  document.querySelector('#teamTable').innerHTML = state.users.map(u => `<tr><td><strong>${escapeHtml(u.name)}</strong></td><td>${escapeHtml(ROLE_LABELS[u.role] || u.role)}</td><td><span class="status ${u.active === false ? 'low' : 'good'}">${u.active === false ? 'Inactivo' : 'Activo'}</span></td><td>${u.lastLogin ? fmtDateTime(u.lastLogin) : '—'}</td><td><button class="mini-action" data-edit-user="${u.id}">Editar</button></td></tr>`).join('');
   const rows = [...state.auditLog].reverse().slice(0, 40);
   document.querySelector('#auditTable').innerHTML = rows.map(e => `<tr><td>${fmtDateTime(e.at)}</td><td>${escapeHtml(e.userName || '')}</td><td><strong>${escapeHtml(e.action)}</strong></td><td>${escapeHtml(e.detail || '')}</td><td>${escapeHtml(e.reason || '')}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Aún no hay movimientos auditados.</td></tr>';
 }

@@ -332,6 +332,12 @@
         const unit = colMap.unit !== -1 && String(row[colMap.unit] || '').trim() ? String(row[colMap.unit]).trim() : 'Unidad';
         const code = colMap.code !== -1 && String(row[colMap.code] || '').trim() ? String(row[colMap.code]).trim() : '';
 
+        // Mismas reglas que el formulario manual: el precio de venta debe ser mayor a $0
+        if (!(price > 0)) {
+          parsedItems.push({ isInvalid: true, error: `«${rawName}»: precio de venta en $0 o vacío`, rawRow: row });
+          continue;
+        }
+
         // Detectar si ya existe
         const isMatch = existingProducts.some(p => {
           if (code && p.code && String(p.code).trim().toLowerCase() === code.toLowerCase()) return true;
@@ -424,7 +430,7 @@
           return `
             <tr style="opacity:0.6;">
               <td><span class="import-badge badge-invalid">Inválido</span></td>
-              <td colspan="8"><span class="muted">${item.error || 'Fila omitida'}</span></td>
+              <td colspan="8"><span class="muted">${escapeHtml(item.error || 'Fila omitida')}</span></td>
             </tr>
           `;
         }
@@ -490,7 +496,6 @@
       confirmBtn.textContent = '⏳ Importando catálogo...';
     }
 
-    const adjustNegative = document.querySelector('#importAdjustNegativeStock')?.checked ?? true;
     const updateExisting = document.querySelector('#importUpdateExisting')?.checked ?? true;
 
     if (typeof state === 'undefined' || !state) {
@@ -507,7 +512,7 @@
     const nowIso = new Date().toISOString();
 
     for (const item of validItems) {
-      const finalStock = adjustNegative && item.stock < 0 ? 0 : item.stock;
+      const finalStock = Math.max(0, Number(item.stock) || 0); // el sistema no admite existencias negativas (igual que el formulario)
 
       // Buscar si el producto ya existe por código o por nombre
       let existingProd = null;

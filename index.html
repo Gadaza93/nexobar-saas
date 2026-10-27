@@ -599,10 +599,7 @@
           <input type="checkbox" id="importUpdateExisting" checked />
           Actualizar productos existentes si coincide el nombre o código
         </label>
-        <label class="check-row">
-          <input type="checkbox" id="importAdjustNegativeStock" checked />
-          Si el stock es negativo, ajustar a 0 (desmarcar para respetar stock negativo)
-        </label>
+        <p class="muted import-note">Las existencias negativas se importan como 0 y las filas con precio de venta en $0 se omiten (mismas reglas que el formulario de productos).</p>
       </div>
 
       <div id="importErrorAlert" class="import-error-alert" hidden></div>
