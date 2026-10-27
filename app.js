@@ -398,11 +398,23 @@ function formatQty(value) { return Number.isInteger(value) ? value : value.toFix
 function formatDate(date) { const d = new Date(`${date}T12:00:00`); return Number.isNaN(d.getTime()) ? '—' : new Intl.DateTimeFormat('es-CO', { day:'2-digit', month:'short' }).format(d); }
 function uid(prefix) { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 let toastTimer = null;
-function showToast(message) {
+// action opcional { label, onClick }: añade un botón al aviso (p. ej. «Imprimir ticket» tras cobrar) y lo deja más tiempo
+function showToast(message, { action = null } = {}) {
   const el = document.querySelector('#toast'); el.textContent = message;
+  const withAction = Boolean(action && typeof document.createElement === 'function' && typeof el.append === 'function');
+  if (withAction) {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'toast-action'; button.textContent = action.label;
+    button.addEventListener('click', () => { el.classList.remove('visible', 'has-action'); action.onClick(); });
+    el.append(button);
+  }
+  el.classList.toggle('has-action', withAction);
+  // Dentro del modal abierto de más arriba: así el botón del aviso no queda inerte detrás del modal
+  const host = typeof document.querySelectorAll === 'function' ? (Array.from(document.querySelectorAll('dialog[open]')).pop() || document.body) : null;
+  if (host && el.parentElement !== host && typeof host.appendChild === 'function') host.appendChild(el);
   // Popover: se reabre en cada aviso para quedar en la top layer por encima del modal abierto (p. ej. «Registrar gasto»)
   if (typeof el.showPopover === 'function') { try { if (el.matches(':popover-open')) el.hidePopover(); el.showPopover(); } catch { /* sin Popover API: queda el z-index */ } }
-  el.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('visible'), 2500);
+  el.classList.add('visible'); clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('visible', 'has-action'), withAction ? 8000 : 2500);
 }
 function isShiftOpen() { return state.cashShift?.status === 'open'; }
 function currentShiftPayments() { return state.payments.filter(payment=>payment.shiftId===state.cashShift?.id); }
@@ -490,6 +502,7 @@ function renderAll() {
   renderHistory();
   renderProfile();
   renderSubscription();
+  renderPrintSettings();
   if (typeof applyPermissions === 'function') applyPermissions(); else if (typeof globalThis.applyPermissions === 'function') globalThis.applyPermissions();
   if (typeof renderUserChip === 'function') renderUserChip(); else if (typeof globalThis.renderUserChip === 'function') globalThis.renderUserChip();
   if (typeof renderInvoices === 'function') renderInvoices(); else if (typeof globalThis.renderInvoices === 'function') globalThis.renderInvoices();
@@ -1269,20 +1282,21 @@ function confirmPayment() {
   if (payDlg) payDlg.close();
 
   const isComplete = order.status === 'paid';
+  const printAction = { label: '🖨 Imprimir ticket', onClick: () => printPaymentReceipt(newPayment.id) };
   if (isComplete) {
     const splitDlg = document.querySelector('#splitBillDialog');
     if (splitDlg && splitDlg.open) splitDlg.close();
     const orderDlg = document.querySelector('#orderDialog');
     if (orderDlg && orderDlg.open) orderDlg.close();
     state.currentOrderId = null;
-    showToast('Cuenta liquidada en su totalidad · Mesa disponible.');
+    showToast('Cuenta liquidada en su totalidad · Mesa disponible.', { action: printAction });
   } else {
     const splitDlg = document.querySelector('#splitBillDialog');
     if (splitDlg && splitDlg.open) {
       renderSplitBill();
     }
     renderOrderDialog();
-    showToast(`Fracción cobrada · ${money.format(currentCheckout.total)}. Quedan ${money.format(orderTotal(order))} en la mesa.`);
+    showToast(`Fracción cobrada · ${money.format(currentCheckout.total)}. Quedan ${money.format(orderTotal(order))} en la mesa.`, { action: printAction });
   }
 
   currentCheckout = null;
@@ -1759,66 +1773,56 @@ function sendCloseWhatsapp(closedShift = null) {
 function printShiftZ(closedShift = null) {
   const shift = closedShift || lastClosedShift || state.closedShifts.slice(-1)[0];
   if (!shift) return showToast('No hay cierre disponible.');
-  const profile = state.profile || defaultState.profile;
   const shiftPayments = state.payments.filter(p => p.shiftId === shift.id);
   const totalSales = shift.totalSales != null ? shift.totalSales : shiftPayments.reduce((s, p) => s + p.amount, 0);
-
-  const isDemo = isDemoMode();
-  const demoWatermarkHtml = isDemo ? `
-    <div class="center bold demo-watermark" style="border:1.5px dashed #444;padding:6px;margin:8px 0;font-size:11px;letter-spacing:0.5px;background:#f3f4f6;">
-      DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM
-    </div>
-  ` : '';
-
-  const printWindow = window.open('', '_blank', 'width=380,height=600');
-  if (!printWindow) return window.print();
-
-  printWindow.document.write(`
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>Ticket Z - Cierre de Turno</title>
-        <style>
-          body { font-family: monospace; font-size: 12px; margin: 15px; color: #000; }
-          .center { text-align: center; }
-          hr { border: 0; border-top: 1px dashed #000; margin: 10px 0; }
-          .row { display: flex; justify-content: space-between; margin: 3px 0; }
-          .bold { font-weight: bold; }
-        </style>
-      </head>
-      <body>
-        ${demoWatermarkHtml}
-        <div class="center">
-          <h2 style="margin:0">${escapeHtml(profile.name || 'NexoBar')}</h2>
-          ${profile.nit ? `<div>NIT: ${escapeHtml(profile.nit)}</div>` : ''}
-          ${profile.address ? `<div>${escapeHtml(profile.address)}</div>` : ''}
-          ${profile.phone ? `<div>Tel: ${escapeHtml(profile.phone)}</div>` : ''}
-          <div class="bold" style="margin-top:5px">COMPROBANTE DE CIERRE (TICKET Z)</div>
-        </div>
-        <hr>
-        <div class="row"><span>Fecha:</span><span>${new Date(shift.closedAt).toLocaleString('es-CO')}</span></div>
-        <div class="row"><span>Cajero:</span><span>${escapeHtml(shift.closedBy || 'Cajero')}</span></div>
-        <div class="row"><span>Cuentas:</span><span>${shiftPayments.length}</span></div>
-        <hr>
-        <div class="row bold"><span>TOTAL VENTAS:</span><span>${money.format(totalSales)}</span></div>
-        <div class="row"><span>Ventas Efectivo:</span><span>${money.format(shift.cashSales || 0)}</span></div>
-        <div class="row"><span>Otros medios:</span><span>${money.format(shift.otherSales || 0)}</span></div>
-        <div class="row"><span>Compras/Gastos:</span><span>- ${money.format(shift.cashExpenses || 0)}</span></div>
-        <hr>
-        <div class="row"><span>Base inicial:</span><span>${money.format(shift.openingCash || 0)}</span></div>
-        <div class="row"><span>Efectivo esperado:</span><span>${money.format(shift.expected || 0)}</span></div>
-        <div class="row bold"><span>Efectivo contado:</span><span>${money.format(shift.counted || 0)}</span></div>
-        <div class="row bold"><span>Diferencia:</span><span>${shift.difference >= 0 ? '+' : ''}${money.format(shift.difference || 0)}</span></div>
-        <hr>
-        ${demoWatermarkHtml}
-        <div class="center" style="margin-top:15px">*** NexoBar POS ***</div>
-        <script>window.onload = function() { window.print(); }<\/script>
-      </body>
-    </html>
-  `);
-  printWindow.document.close();
+  const html = buildShiftZHtml(shift, { profile: state.profile || defaultState.profile, paperWidth: printSettings().paperWidth, demo: isDemoMode(), accounts: shiftPayments.length, totalSales });
+  return sendToPrinter(html, 'Ticket Z');
 }
 globalThis.printShiftZ = printShiftZ;
+
+/* ---------- Impresión de tickets (plantillas y motor en print.js) ----------
+   Ajustes por equipo en state.printSettings: ancho del rollo y, en escritorio, impresora e impresión directa. */
+const PRINT_DEFAULTS = { paperWidth: 80, silent: false, printerName: '' };
+let printerList = null; // impresoras del sistema (solo escritorio), se consultan una vez
+function printSettings() { state.printSettings = { ...PRINT_DEFAULTS, ...(state.printSettings || {}) }; return state.printSettings; }
+async function sendToPrinter(html, label = 'Ticket') {
+  const settings = printSettings(), silent = Boolean(globalThis.desktop?.printReceipt) && settings.silent;
+  const result = await printReceipt(html, { silent, printerName: settings.printerName || null });
+  if (result?.ok) { if (silent) showToast(`🖨 ${label} enviado a la impresora.`); }
+  else if (!result?.cancelled) showToast(`⚠ No se pudo imprimir: ${result?.error || 'revisa la impresora'}.`);
+  return result;
+}
+function printPaymentReceipt(paymentId, { reprint = false } = {}) {
+  const payment = state.payments.find(p => p.id === paymentId);
+  if (!payment) { showToast('No se encontró la factura.'); return Promise.resolve({ ok: false }); }
+  const html = buildReceiptHtml(payment, { profile: state.profile || defaultState.profile, paperWidth: printSettings().paperWidth, demo: isDemoMode(), reprint });
+  return sendToPrinter(html, `Ticket ${payment.invoiceNo || ''}`.trim());
+}
+function printTestTicket() {
+  const sample = { invoiceNo: 'PRUEBA', paidAt: Date.now(), customer: 'Mesa de prueba', cashierName: actor().userName || 'Caja', amount: 18000, method: 'Efectivo', payments: [{ method: 'Efectivo', amount: 18000, received: 20000, change: 2000 }], items: [{ name: 'Producto de prueba', qty: 2, price: 6000 }, { name: 'Otro producto', qty: 1, price: 6000 }] };
+  return sendToPrinter(buildReceiptHtml(sample, { profile: state.profile || defaultState.profile, paperWidth: printSettings().paperWidth, demo: isDemoMode() }), 'Ticket de prueba');
+}
+async function loadPrinterList(force = false) {
+  if (!globalThis.desktop?.listPrinters || (printerList && !force)) return;
+  try { printerList = await desktop.listPrinters(); } catch { printerList = []; }
+  renderPrintSettings();
+}
+function renderPrintSettings() {
+  const widthEl = document.querySelector('#printPaperWidth'); if (!widthEl || !state) return;
+  const settings = printSettings(); widthEl.value = String(settings.paperWidth);
+  const silentEl = document.querySelector('#printSilent'); if (silentEl) silentEl.checked = Boolean(settings.silent);
+  const printerEl = document.querySelector('#printPrinterName');
+  if (printerEl && globalThis.desktop?.listPrinters) {
+    const list = printerList || [], saved = settings.printerName;
+    const options = [`<option value="">Predeterminada${list.find(p => p.isDefault) ? ` (${escapeHtml(list.find(p => p.isDefault).displayName)})` : ''}</option>`]
+      .concat(list.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.displayName)}</option>`));
+    if (saved && !list.some(p => p.name === saved)) options.push(`<option value="${escapeHtml(saved)}">${escapeHtml(saved)} (no conectada)</option>`);
+    printerEl.innerHTML = options.join(''); printerEl.value = saved || '';
+    if (!printerList) loadPrinterList();
+  }
+}
+function savePrintSetting(key, value) { printSettings()[key] = value; saveState(); renderPrintSettings(); }
+globalThis.printPaymentReceipt = printPaymentReceipt;
 
 function getLowAndOutOfStockItems() {
   return state.inventory.filter(i => i.qty <= i.min).map(item => {
@@ -2004,6 +2008,8 @@ document.addEventListener('click', event => {
   if (target.id === 'confirmCloseButton') confirmClose();
   if (target.id === 'sendCloseWhatsappBtn') sendCloseWhatsapp();
   if (target.id === 'printCloseZBtn') printShiftZ();
+  if (target.id === 'printTestButton') printTestTicket();
+  if (target.id === 'printRefreshPrinters') loadPrinterList(true);
   if (target.id === 'purchaseSuggestButton') openPurchaseSuggestDialog();
   if (target.id === 'copyPurchaseOrderButton') copyPurchaseOrder();
   if (target.id === 'saveProfileButton') saveProfile();
@@ -2028,6 +2034,7 @@ document.querySelector('#countedCash').addEventListener('input', checkCashDiffer
 document.querySelector('#importInput').addEventListener('change', e => { if (e.target.files[0]) importBackup(e.target.files[0]); e.target.value = ''; });
 document.addEventListener('input', e => { if (e.target.dataset.purchaseIndex !== undefined) updatePurchaseDraft(e.target); });
 document.addEventListener('change', e => { if (e.target.dataset.purchaseIndex !== undefined) updatePurchaseDraft(e.target); });
+document.addEventListener('change', e => { if (e.target.id === 'printPaperWidth') savePrintSetting('paperWidth', Number(e.target.value) === 58 ? 58 : 80); else if (e.target.id === 'printSilent') savePrintSetting('silent', e.target.checked); else if (e.target.id === 'printPrinterName') savePrintSetting('printerName', e.target.value); });
 document.querySelector('#productImage').addEventListener('change', event => { const file = event.target.files[0]; readLocalImage(file, image => { pendingProductImage = image; setImagePreview(document.querySelector('#productImagePreview'), image, '🍾'); }); });
 document.querySelector('#businessImage').addEventListener('change', event => { const file = event.target.files[0]; readLocalImage(file, image => { pendingBusinessImage = image; setImagePreview(document.querySelector('#profileImagePreview'), image, document.querySelector('#businessName').value || 'N'); }); });
 if ('serviceWorker' in navigator && !window.desktop) window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').then(reg => reg.update().catch(() => {})).catch(() => { }));

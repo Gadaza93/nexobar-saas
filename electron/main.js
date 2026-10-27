@@ -47,6 +47,29 @@ ipcMain.handle('backup:chooseFolder', async () => {
   const config = readConfig(); config.backupDir = result.filePaths[0]; writeConfig(config); return config.backupDir;
 });
 ipcMain.handle('app:info', () => ({ backupDir: backupDir(), dataFile: mirrorFile(), version: app.getVersion(), platform: process.platform }));
+// Impresión de tickets: ventana oculta temporal (mismo comportamiento que main.js de la raíz)
+ipcMain.handle('print:receipt', async (_event, html, options = {}) => {
+  if (typeof html !== 'string' || !html || html.length > 8 * 1024 * 1024) return { ok: false, error: 'Contenido de impresión no válido.' };
+  const silent = Boolean(options && options.silent), deviceName = options && typeof options.printerName === 'string' ? options.printerName.trim() : '';
+  const tmpFile = path.join(app.getPath('temp'), `nexobar-ticket-${Date.now()}-${Math.random().toString(36).slice(2)}.html`); // un logo en data URL puede superar el límite de URL
+  let printWin = null;
+  try {
+    fs.writeFileSync(tmpFile, html, 'utf8');
+    printWin = new BrowserWindow({ show: false, width: 420, height: 900, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false } });
+    printWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    printWin.webContents.on('will-navigate', event => event.preventDefault());
+    await printWin.loadFile(tmpFile);
+    return await new Promise(resolve => printWin.webContents.print({ silent, printBackground: true, margins: { marginType: 'none' }, ...(deviceName ? { deviceName } : {}) }, (success, failureReason) => {
+      const cancelled = !success && /cancel/i.test(String(failureReason || ''));
+      resolve({ ok: success, cancelled, error: success || cancelled ? null : String(failureReason || 'Error de impresión') });
+    }));
+  } catch (error) { return { ok: false, error: String(error.message || error) }; }
+  finally { if (printWin && !printWin.isDestroyed()) printWin.destroy(); fs.unlink(tmpFile, () => {}); }
+});
+ipcMain.handle('print:listPrinters', async () => {
+  if (!win) return [];
+  try { return (await win.webContents.getPrintersAsync()).map(p => ({ name: p.name, displayName: p.displayName || p.name, isDefault: Boolean(p.isDefault) })); } catch { return []; }
+});
 ipcMain.on('app:flushed', () => { flushed = true; if (win) win.close(); });
 
 function createWindow() {

@@ -47,7 +47,8 @@ Al final de `<body>` (el orden importa, solo `app.js` ejecuta el arranque):
 4. `modules.js` — vistas/render (facturas, reportes, etc.).
 5. `sync.js` — `NexoSync`.
 6. `import-products.js` — importación de productos desde Excel.
-7. `app.js` — estado, lógica de negocio y `bootstrap()`.
+7. `print.js` — plantillas de tickets térmicos (58/80 mm) y `printReceipt()`: en escritorio vía `desktop.printReceipt` (ventana oculta en `main.js`), en web con un `<iframe>` invisible. No usar `window.open` para imprimir: en Electron está bloqueado.
+8. `app.js` — estado, lógica de negocio y `bootstrap()`.
 
 ## Estilos: paleta Obsidian
 

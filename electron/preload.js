@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('desktop', {
   openBackupFolder: () => ipcRenderer.invoke('backup:openFolder'),
   chooseBackupFolder: () => ipcRenderer.invoke('backup:chooseFolder'),
   info: () => ipcRenderer.invoke('app:info'),
+  printReceipt: (html, silent = false, printerName = null) => ipcRenderer.invoke('print:receipt', String(html), { silent: Boolean(silent), printerName: printerName ? String(printerName) : null }),
+  listPrinters: () => ipcRenderer.invoke('print:listPrinters'),
   onFlushRequest: callback => ipcRenderer.on('app:flush', () => callback()),
   flushDone: () => ipcRenderer.send('app:flushed'),
 });

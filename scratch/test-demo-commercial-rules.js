@@ -125,6 +125,8 @@ delete require.cache[require.resolve('../modules.js')];
 require('../modules.js');
 delete require.cache[require.resolve('../sync.js')];
 require('../sync.js');
+delete require.cache[require.resolve('../print.js')];
+require('../print.js');
 delete require.cache[require.resolve('../app.js')];
 require('../app.js');
 
@@ -213,6 +215,8 @@ assert.strictEqual(payWmBottom.hidden, false, '#payWatermarkBottom debe ser visi
 
 // B) Al imprimir Ticket Z: printShiftZ()
 global.__lastPrintedHtml = '';
+// El Ticket Z pasa por el motor unificado printReceipt (print.js): se captura el HTML enviado a imprimir
+globalThis.printReceipt = async html => { global.__lastPrintedHtml = html; return { ok: true }; };
 printShiftZ({
   id: 'shift_test',
   closedAt: Date.now(),

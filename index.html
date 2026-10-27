@@ -156,6 +156,20 @@
               <button id="resetShiftConfigButton" class="danger-outline-button" type="button">⚠️ Forzar cierre de turno y reiniciar saldo a $0</button>
             </div>
           </article>
+          <article class="data-card backup-card print-settings-card" id="printSettingsCard">
+            <h3>Impresión de tickets</h3>
+            <p class="muted">Comprobantes de venta, reimpresiones y Ticket Z para impresoras térmicas. Se guarda en este equipo.</p>
+            <div class="print-settings-grid">
+              <label class="field-label" for="printPaperWidth">Ancho del rollo
+                <select id="printPaperWidth"><option value="80">80 mm (estándar)</option><option value="58">58 mm (compacta)</option></select>
+              </label>
+              <label class="field-label" for="printPrinterName" data-desktop-only hidden>Impresora
+                <span class="print-printer-row"><select id="printPrinterName"><option value="">Predeterminada de Windows</option></select><button id="printRefreshPrinters" class="outline-button" type="button" title="Volver a buscar impresoras">↻</button></span>
+              </label>
+            </div>
+            <label class="check-row" data-desktop-only hidden><input type="checkbox" id="printSilent" /> Imprimir directo, sin mostrar el diálogo de impresión</label>
+            <div class="backup-actions"><button id="printTestButton" class="outline-button" type="button">🖨 Imprimir ticket de prueba</button></div>
+          </article>
           <article class="data-card backup-card" data-perm="backup">
             <h3>Respaldos de la base de datos</h3>
             <p class="muted">Se guarda una copia completa de todo (ventas, inventario, usuarios, bitácora). Para restaurarla usa «Importar respaldo».</p>
@@ -700,6 +714,7 @@
     <script src="./modules.js"></script>
     <script src="./sync.js"></script>
     <script src="./import-products.js"></script>
+    <script src="./print.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

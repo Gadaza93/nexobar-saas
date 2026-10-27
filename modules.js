@@ -223,7 +223,9 @@ let invoiceDraft = null, invoiceToDelete = null;
 function invoiceCardMarkup(payment, { actions = false } = {}) {
   const who = [payment.waiterName && `Mesero: ${escapeHtml(payment.waiterName)}`, payment.cashierName && `Cajero: ${escapeHtml(payment.cashierName)}`].filter(Boolean).join(' · ');
   const edited = payment.editedAt ? `<span class="badge-edited" title="${escapeHtml((payment.edits || []).slice(-1)[0]?.reason || '')}">Editada · ${fmtDateTime(payment.editedAt)}</span>` : '';
-  const buttons = actions && can('invoiceEdit') ? `<div class="invoice-actions"><button class="mini-action" data-edit-invoice="${payment.id}">Editar</button><button class="mini-action delete-action" data-delete-invoice="${payment.id}">Eliminar</button></div>` : '';
+  // Reimprimir: cualquiera que vea las facturas; editar/eliminar: solo con permiso invoiceEdit
+  const editButtons = can('invoiceEdit') ? `<button class="mini-action" data-edit-invoice="${payment.id}">Editar</button><button class="mini-action delete-action" data-delete-invoice="${payment.id}">Eliminar</button>` : '';
+  const buttons = actions ? `<div class="invoice-actions"><button class="mini-action" data-print-invoice="${payment.id}" title="Reimprimir ticket">🖨 Imprimir</button>${editButtons}</div>` : '';
   return `<article class="invoice-card"><div class="invoice-head"><div><strong>${escapeHtml(payment.invoiceNo || 'FAC')} · ${escapeHtml(payment.customer || 'Venta mostrador')}</strong><span>${new Date(paymentTimestamp(payment)).toLocaleString('es-CO')} · ${escapeHtml(payment.method)}${who ? ' · ' + who : ''}</span>${edited}</div><b>${money.format(payment.amount)}</b></div>${invoiceItemsMarkup(payment)}${buttons}</article>`;
 }
 function renderRecentInvoices() {
@@ -848,6 +850,7 @@ function handleModuleClick(event) {
   if (d.loginUser) { loginTarget = d.loginUser; loginPin = ''; setLoginError(''); return renderLogin(); }
   if (d.key !== undefined) return pressPin(d.key);
   if (d.editUser) return openUserDialog(d.editUser);
+  if (d.printInvoice) return printPaymentReceipt(d.printInvoice, { reprint: true });
   if (d.editInvoice) return openInvoiceEdit(d.editInvoice);
   if (d.deleteInvoice) return openInvoiceDelete(d.deleteInvoice);
   if (d.removeInvLine !== undefined) { invoiceDraft.items.splice(Number(d.removeInvLine), 1); return renderInvoiceDraft(); }

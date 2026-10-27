@@ -33,6 +33,7 @@
       "modules.js",
       "sync.js",
       "import-products.js",
+      "print.js",
       "xlsx.full.min.js",
       "theme.css",
       "styles.css",
