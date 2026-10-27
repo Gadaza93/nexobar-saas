@@ -102,4 +102,50 @@ assert.ok(els['#netExpenseGroups'].innerHTML.includes('<details class="net-group
 assert.ok(!els['#netExpenseGroups'].innerHTML.includes('999.000'), 'No muestra gastos fuera del rango');
 console.log('   ✅ Render: KPIs, veredicto en rojo por pérdida y desglose colapsable por categoría.');
 
-console.log('\n✅ Todas las pruebas de utilidad neta pasaron.');
+// --- E. Excel de Utilidad neta: encabezado con el período, KPIs y gastos por categoría ---
+run('netRange = "lastMonth";');
+let sheets = get('netProfitSheets()');
+const cells = row => row.map(c => (c && typeof c === 'object' ? c.v : c));
+let rows = sheets[0].rows.map(cells);
+assert.ok(String(rows[0][0]).startsWith('Utilidad Neta - Mes pasado'));
+const kpi = label => rows.find(r => r[0] === label)?.[1];
+assert.strictEqual(kpi('Ventas netas'), 24000); assert.strictEqual(kpi('Costo de mercancía vendida'), 12000);
+assert.strictEqual(kpi('Gastos totales'), 999000); assert.strictEqual(kpi('Utilidad neta'), -987000);
+assert.strictEqual(kpi('Margen neto'), Number((-987000 / 24000 * 100).toFixed(1)));
+assert.deepStrictEqual(rows.find(r => r[0] === 'Arriendo'), ['Arriendo', 1, 999000, 100]);
+assert.strictEqual(sheets[1].rows.length, 2, 'Detalle: encabezado + 1 gasto del mes pasado');
+console.log('   ✅ Excel de utilidad neta: «Utilidad Neta - Mes pasado», KPIs y gastos por categoría.');
+
+// --- F. Valoración de inventario ---
+run(`
+  state.products = [
+    { id: 'p1', name: 'Cerveza', category: 'Cervezas', price: 6000, cost: 3000, inventoryId: 'stock-p1' },
+    { id: 'p2', name: 'Ron', category: 'Licores', price: 90000, cost: 50000, inventoryId: 'stock-p2' },
+    { id: 'p3', name: 'Agua', category: 'Bebidas', price: 3000, cost: 1000, inventoryId: 'stock-p3' },
+  ];
+  state.inventory = [{ id: 'stock-p1', qty: 24, unit: 'und' }, { id: 'stock-p2', qty: 3, unit: 'bot' }, { id: 'stock-p3', qty: -2, unit: 'und' }];
+`);
+const v = get('inventoryValuation()');
+assert.strictEqual(v.capital, 24 * 3000 + 3 * 50000, 'El stock negativo se valoriza en 0');
+assert.strictEqual(v.commercial, 24 * 6000 + 3 * 90000);
+assert.strictEqual(v.profit, v.commercial - v.capital);
+assert.ok(Math.abs(v.margin - v.profit / v.commercial * 100) < 1e-9);
+assert.strictEqual(v.negative, 1);
+assert.deepStrictEqual(v.rows.map(r => r.name), ['Ron', 'Cerveza', 'Agua'], 'Ordenado por capital invertido');
+run('renderInventoryValue();');
+assert.strictEqual(els['#invCapital'].textContent, run('money.format(222000)'));
+assert.ok(els['#inventoryValueTable'].innerHTML.includes('Ron'));
+rows = get('inventoryValueSheets()')[0].rows.map(cells);
+assert.strictEqual(rows[0][0].startsWith('Inventario Valorizado'), true);
+assert.deepStrictEqual(rows.find(r => r[0] === 'Ron'), ['Ron', 'Licores', 3, 'bot', 50000, 150000, 90000, 270000, 120000]);
+assert.deepStrictEqual(rows.find(r => r[0] === 'Total').filter(x => x !== ''), ['Total', 222000, 414000, 192000]);
+console.log('   ✅ Valoración de inventario: capital, valor comercial, ganancia, margen y Excel «Inventario Valorizado».');
+
+// --- G. El botón Excel del encabezado exporta la sub-pestaña activa ---
+run('var downloads = []; can = () => true; buildXlsx = s => s; downloadBlob = (b, name) => downloads.push(name);');
+run('reportTab = "net"; netRange = "today"; exportReportXlsx(); reportTab = "inventory"; exportReportXlsx();');
+const names = get('downloads');
+assert.ok(names[0].startsWith('utilidad-neta-') && names[1].startsWith('inventario-valorizado-'), names.join(', '));
+console.log('   ✅ Exportar Excel descarga utilidad neta o inventario según la sub-pestaña.');
+
+console.log('\n✅ Todas las pruebas de utilidad neta y valoración de inventario pasaron.');

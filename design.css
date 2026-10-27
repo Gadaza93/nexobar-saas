@@ -1518,3 +1518,13 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 .net-drawer-note { margin: 4px 0 0; font-size: 12px; }
 @media (max-width: 1100px) { .net-kpis.stats-grid { grid-auto-flow: row; grid-template-columns: repeat(3, 1fr); } .net-kpis .stat-card + .stat-card { border-left: 0; } .net-kpis .stat-card { border-top: 1px solid var(--line); } .net-kpis .stat-card:nth-child(-n+3) { border-top: 0; } .net-kpis .stat-card:not(:nth-child(3n+1)) { border-left: 1px solid var(--line); } }
 @media (max-width: 768px) { .net-kpis.stats-grid { grid-template-columns: 1fr 1fr; } .net-kpis .stat-card:nth-child(n) { border-left: 0; border-top: 1px solid var(--line); } .net-kpis .stat-card:nth-child(-n+2) { border-top: 0; } .net-kpis .stat-card:nth-child(even) { border-left: 1px solid var(--line); } .net-kpis .stat-card:last-child { grid-column: 1 / -1; } .report-subtab { flex: 1; } }
+
+/* ---------- Reportes: valoración de inventario ---------- */
+.inventory-value-panel .report-filters { justify-content: space-between; }
+.inv-value-note { margin: 0; font-size: 12px; }
+.inv-value-kpis .stat-card strong { font-size: 24px; }
+.inv-value-card { overflow-x: auto; }
+.inv-value-table td:not(:first-child), .inv-value-table th:not(:first-child) { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.inv-value-table tfoot td { border-top: 2px solid var(--line); }
+@media (max-width: 900px) { .inv-value-kpis.stats-grid { grid-auto-flow: row; grid-template-columns: 1fr 1fr; } }
+@media (max-width: 768px) { .report-subtabs { overflow-x: auto; } .report-subtab { white-space: nowrap; } .inventory-value-panel .report-filters .outline-button { width: 100%; } }

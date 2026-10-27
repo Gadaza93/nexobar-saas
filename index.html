@@ -195,6 +195,7 @@
           <div class="report-subtabs" role="tablist" aria-label="Secciones de reportes">
             <button type="button" class="report-subtab active" role="tab" aria-selected="true" data-report-tab="summary">Resumen</button>
             <button type="button" class="report-subtab" role="tab" aria-selected="false" data-report-tab="net">Utilidad neta</button>
+            <button type="button" class="report-subtab" role="tab" aria-selected="false" data-report-tab="inventory">Valoración de inventario</button>
           </div>
           <div id="netProfitPanel" class="net-profit-panel" hidden>
             <div class="report-filters" id="netFilters">
@@ -217,6 +218,16 @@
               <article class="data-card"><h3>Cascada de utilidad</h3><div id="netWaterfall" class="report-list"></div><p id="netVerdict" class="net-verdict"></p></article>
               <article class="data-card"><h3>Gastos por categoría</h3><p class="muted">Gastos de caja menor de los turnos y gastos fijos/generales del período. Las compras de mercancía no se suman aquí: ya están en el costo de ventas.</p><div id="netExpenseGroups" class="net-groups"></div></article>
             </div>
+          </div>
+          <div id="inventoryValuePanel" class="inventory-value-panel" hidden>
+            <div class="report-filters"><p class="muted inv-value-note">Existencias actuales del catálogo valorizadas al costo promedio y al precio de venta.</p><button type="button" id="exportInventoryXlsxButton" class="outline-button">Exportar Inventario Valorizado</button></div>
+            <div class="stats-grid inv-value-kpis">
+              <article class="stat-card"><span>Capital invertido total</span><strong id="invCapital">$0</strong><small id="invCapitalNote">Stock × costo</small></article>
+              <article class="stat-card"><span>Valor comercial total</span><strong id="invCommercial">$0</strong><small>Stock × precio de venta</small></article>
+              <article class="stat-card net-result" id="invProfitCard"><span>Ganancia proyectada en bodega</span><strong id="invProfit">$0</strong><small>Valor comercial − capital</small></article>
+              <article class="stat-card net-result" id="invMarginCard"><span>Margen potencial</span><strong id="invMargin">—</strong><small>Sobre el valor comercial</small></article>
+            </div>
+            <div class="data-card inv-value-card"><table class="inv-value-table"><thead><tr><th>Producto</th><th>Stock actual</th><th>Costo unitario</th><th>Total costo</th><th>Precio venta</th><th>Utilidad proyectada</th></tr></thead><tbody id="inventoryValueTable"></tbody><tfoot id="inventoryValueTotals"></tfoot></table></div>
           </div>
           <div id="reportSummaryPanel">
           <div class="report-filters" id="reportFilters">

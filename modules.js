@@ -856,10 +856,10 @@ function netProfitDataset(from, to) {
 function applyReportTab() {
   if (typeof document === 'undefined') return;
   document.querySelectorAll('[data-report-tab]').forEach(b => { const on = b.dataset.reportTab === reportTab; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)); });
-  const summary = document.querySelector('#reportSummaryPanel'), net = document.querySelector('#netProfitPanel');
-  if (summary) summary.hidden = reportTab !== 'summary';
-  if (net) net.hidden = reportTab !== 'net';
+  const panels = { summary: '#reportSummaryPanel', net: '#netProfitPanel', inventory: '#inventoryValuePanel' };
+  Object.entries(panels).forEach(([tab, sel]) => { const el = document.querySelector(sel); if (el) el.hidden = reportTab !== tab; });
   if (reportTab === 'net') renderNetProfit();
+  if (reportTab === 'inventory') renderInventoryValue();
 }
 function renderNetProfit() {
   const $ = s => document.querySelector(s); if (!$('#netProfitPanel')) return;
@@ -909,6 +909,79 @@ function renderNetProfit() {
 }
 globalThis.renderNetProfit = renderNetProfit;
 globalThis.netProfitDataset = netProfitDataset;
+const NET_RANGE_LABELS = { today: 'Hoy', week: 'Esta semana', month: 'Este mes', lastMonth: 'Mes pasado', custom: 'Personalizado' };
+function netProfitSheets() {
+  const { from, to } = netBounds(), d = netProfitDataset(from, to), period = from === to ? from : `${from} a ${to}`;
+  const groups = NET_EXPENSE_GROUPS.filter(k => d.groups[k]).sort((a, b) => d.groups[b].total - d.groups[a].total);
+  const share = v => cellP(d.expenses ? Number((v / d.expenses * 100).toFixed(1)) : 0);
+  const summary = [
+    [{ v: `Utilidad Neta - ${NET_RANGE_LABELS[netRange] || 'Período'} · ${state.profile?.name || 'NexoBar'}`, s: XS.title }], ['Período', period], ['Generado', new Date().toLocaleString('es-CO')], [],
+    [cellH('Indicador'), cellH('Valor')],
+    ['Ventas netas', cellM(d.sales)], ['Facturas cobradas', cellI(d.invoices)], ['Costo de mercancía vendida', cellM(d.cogs)], ['Utilidad bruta', cellM(d.gross)], ['Margen bruto', cellP(Number(d.grossMargin.toFixed(1)))],
+    ['Gastos totales', cellM(d.expenses)], [cellB('Utilidad neta'), cellM(d.net)], [cellB('Margen neto'), d.sales ? cellP(Number(d.netMargin.toFixed(1))) : '—'], [],
+    [cellH('Gastos por categoría'), cellH('Registros'), cellH('Total'), cellH('% del gasto')],
+    ...groups.map(k => [k, cellI(d.groups[k].items.length), cellM(d.groups[k].total), share(d.groups[k].total)]),
+    [cellB('Total gastos'), cellI(d.expenseCount), cellM(d.expenses), share(d.expenses)],
+  ];
+  if (d.fromDrawer) summary.push([], ['Pagado con efectivo de caja (turnos)', '', cellM(d.fromDrawer)]);
+  const detail = groups.flatMap(k => d.groups[k].items.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(e => [e.date, k, e.category || '', e.description || '', e.method || '', cellM(Number(e.amount) || 0)]));
+  return markDemoSheets([
+    { name: 'Utilidad neta', widths: [34, 12, 16, 12], rows: summary },
+    { name: 'Detalle de gastos', widths: [12, 20, 20, 34, 14, 14], rows: [['Fecha', 'Categoría', 'Tipo', 'Descripción', 'Medio de pago', 'Valor'].map(cellH), ...detail] },
+  ]);
+}
+
+/* ============ Valoración de inventario ============
+   Existencias actuales (state.inventory, enlazado 1:1 por product.inventoryId) × costo promedio y × precio de venta.
+   Un stock negativo (vendido sin existencias registradas) se muestra tal cual, pero se valoriza en 0. */
+function inventoryValuation() {
+  const supplies = new Map(state.inventory.map(i => [i.id, i])), rows = [];
+  let capital = 0, commercial = 0, negative = 0;
+  for (const p of state.products) {
+    const supply = supplies.get(p.inventoryId), stock = Number(supply ? supply.qty : p.stock) || 0, units = Math.max(0, stock);
+    const cost = Number(p.cost) || 0, price = Number(p.price) || 0, totalCost = units * cost, totalValue = units * price;
+    if (stock < 0) negative++;
+    capital += totalCost; commercial += totalValue;
+    rows.push({ id: p.id, name: p.name, category: p.category || 'Sin categoría', unit: supply?.unit || 'und', stock, cost, price, totalCost, totalValue, profit: totalValue - totalCost });
+  }
+  rows.sort((a, b) => b.totalCost - a.totalCost || a.name.localeCompare(b.name, 'es'));
+  const profit = commercial - capital;
+  return { rows, capital, commercial, profit, margin: commercial ? profit / commercial * 100 : 0, negative };
+}
+function renderInventoryValue() {
+  const $ = s => document.querySelector(s); if (!$('#inventoryValuePanel')) return;
+  const v = inventoryValuation(), tone = !v.commercial ? 'flat' : v.profit >= 0 ? 'gain' : 'loss', signed = n => `${n < 0 ? '−' : ''}${money.format(Math.abs(n))}`;
+  $('#invCapital').textContent = money.format(v.capital);
+  $('#invCapitalNote').textContent = `${v.rows.length} ${v.rows.length === 1 ? 'producto' : 'productos'}${v.negative ? ` · ${v.negative} con stock negativo` : ''}`;
+  $('#invCommercial').textContent = money.format(v.commercial);
+  $('#invProfit').textContent = signed(v.profit);
+  $('#invMargin').textContent = v.commercial ? `${v.margin.toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : '—';
+  ['#invProfitCard', '#invMarginCard'].forEach(id => { $(id).classList.toggle('is-gain', tone === 'gain'); $(id).classList.toggle('is-loss', tone === 'loss'); });
+  $('#inventoryValueTable').innerHTML = v.rows.length ? v.rows.map(r => `<tr><td><strong>${escapeHtml(r.name)}</strong><br><small class="muted">${escapeHtml(r.category)}</small></td><td>${r.stock < 0 ? `<span class="net-figure loss" title="Stock negativo: se valoriza en $0">${formatQty(r.stock)}</span>` : formatQty(r.stock)} <small class="muted">${escapeHtml(r.unit)}</small></td><td>${money.format(r.cost)}</td><td><strong>${money.format(r.totalCost)}</strong></td><td>${money.format(r.price)}</td><td><span class="net-figure ${r.profit < 0 ? 'loss' : r.profit > 0 ? 'gain' : ''}">${signed(r.profit)}</span></td></tr>`).join('')
+    : '<tr><td colspan="6" class="muted" style="text-align:center;padding:28px 16px;">No hay productos en el catálogo.</td></tr>';
+  $('#inventoryValueTotals').innerHTML = v.rows.length ? `<tr><td><strong>Total</strong></td><td></td><td></td><td><strong>${money.format(v.capital)}</strong></td><td></td><td><strong class="net-figure ${tone}">${signed(v.profit)}</strong></td></tr>` : '';
+}
+function inventoryValueSheets() {
+  const v = inventoryValuation();
+  const rows = [
+    [{ v: `Inventario Valorizado · ${state.profile?.name || 'NexoBar'}`, s: XS.title }], ['Fecha de corte', today()], ['Generado', new Date().toLocaleString('es-CO')], [],
+    [cellH('Indicador'), cellH('Valor')],
+    ['Capital invertido total', cellM(v.capital)], ['Valor comercial total', cellM(v.commercial)], ['Ganancia proyectada en bodega', cellM(v.profit)], ['Margen potencial', v.commercial ? cellP(Number(v.margin.toFixed(1))) : '—'], [],
+    ['Producto', 'Categoría', 'Stock actual', 'Unidad', 'Costo unitario', 'Total costo', 'Precio venta', 'Valor comercial', 'Utilidad proyectada'].map(cellH),
+    ...v.rows.map(r => [r.name, r.category, cellD(r.stock), r.unit, cellM(r.cost), cellM(r.totalCost), cellM(r.price), cellM(r.totalValue), cellM(r.profit)]),
+    [cellB('Total'), '', '', '', '', cellM(v.capital), '', cellM(v.commercial), cellM(v.profit)],
+  ];
+  if (v.negative) rows.push([], [`${v.negative} producto(s) con stock negativo se valorizan en $0.`]);
+  return markDemoSheets([{ name: 'Inventario valorizado', widths: [30, 18, 12, 8, 14, 16, 14, 16, 18], rows }]);
+}
+function exportInventoryXlsx() {
+  if (!can('view.reports')) return deny();
+  const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
+  downloadBlob(buildXlsx(inventoryValueSheets()), `inventario-valorizado-${isDemo ? 'DEMO-NETXPREMIUM-' : ''}${today()}.xlsx`);
+  showToast('Inventario valorizado descargado.');
+}
+globalThis.inventoryValuation = inventoryValuation;
+globalThis.renderInventoryValue = renderInventoryValue;
 
 /* ---------- Exportar a Excel (.xlsx real, sin librerías) ---------- */
 const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -977,6 +1050,9 @@ function reportSheets() {
   sheets.push({ name: 'Gastos', widths: [12, 22, 34, 14, 14], rows: [['Fecha', 'Tipo', 'Descripción', 'Medio de pago', 'Valor'].map(cellH), ...d.expenses.map(e => [e.date, e.category, e.description, e.method, cellM(e.amount)])] });
   sheets.push({ name: 'Mermas y conteos', widths: [12, 16, 24, 12, 8, 14, 34, 16], rows: [['Fecha', 'Tipo', 'Insumo', 'Cantidad', 'Unidad', 'Valor', 'Motivo', 'Usuario'].map(cellH), ...d.stock.map(e => [e.date, STOCK_TYPES[e.type] || e.type, e.itemName, cellD(e.delta), e.unit || '', cellM(e.value || 0), e.reason || '', e.userName || ''])] });
 
+  return markDemoSheets(sheets);
+}
+function markDemoSheets(sheets) {
   const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
   if (isDemo) {
     sheets.forEach(s => {
@@ -989,7 +1065,13 @@ function reportSheets() {
 function downloadBlob(blob, filename) { const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1500); }
 function exportReportXlsx() {
   if (!can('view.reports')) return deny();
+  if (reportTab === 'inventory') return exportInventoryXlsx(); // el botón del encabezado exporta la sub-pestaña que se está viendo
   const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
+  if (reportTab === 'net') {
+    const { from, to } = netBounds();
+    downloadBlob(buildXlsx(netProfitSheets()), `utilidad-neta-${isDemo ? 'DEMO-NETXPREMIUM-' : ''}${from}${from === to ? '' : '_a_' + to}.xlsx`);
+    return showToast('Utilidad neta descargada en Excel.');
+  }
   const { from, to } = reportBounds();
   const filename = isDemo ? `reporte-DEMO-NETXPREMIUM-${from}${from === to ? '' : '_a_' + to}.xlsx` : `reporte-${from}${from === to ? '' : '_a_' + to}.xlsx`;
   downloadBlob(buildXlsx(reportSheets()), filename);
@@ -1032,7 +1114,7 @@ function handleModuleClick(event) {
     newUserButton: () => openUserDialog(), saveUserButton: saveUser, saveInvoiceButton: saveInvoiceEdit, invoiceAddButton: addInvoiceLine, invoiceAddTender: () => { if (!invoiceDraft) return; invoiceDraft.tenders.push({ method: 'Nequi', amount: 0 }); renderInvoiceTenders(); }, confirmDeleteInvoiceButton: confirmDeleteInvoice,
     invoiceTodayButton: () => { invoiceFilter.date = ''; renderInvoices(); }, invoiceAllButton: () => { invoiceFilter.date = 'all'; renderInvoices(); },
     newSupplierButton: () => openSupplierDialog(), saveSupplierButton: saveSupplier, newWasteButton: openWasteDialog, saveWasteButton: saveWaste, newCountButton: openCountDialog, applyCountButton: applyCount,
-    exportXlsxButton: exportReportXlsx, printReportButton: printReport,
+    exportXlsxButton: exportReportXlsx, exportInventoryXlsxButton: exportInventoryXlsx, printReportButton: printReport,
     downloadTemplateBtn: () => globalThis.downloadProductTemplate && globalThis.downloadProductTemplate(),
     importProductsBtn: () => globalThis.openImportProductsDialog && globalThis.openImportProductsDialog(),
     themeToggle: () => { const light = document.documentElement.dataset.theme !== 'light'; if (light) document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme; try { localStorage.setItem('nexobar-theme', light ? 'light' : 'dark'); localStorage.setItem('brasa-theme', light ? 'light' : 'dark'); } catch { /* sin almacenamiento */ } },
