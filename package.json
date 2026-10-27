@@ -1,6 +1,6 @@
 {
   "name": "nexobar-pos",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "NexoBar · POS Inteligente para Bares con funcionamiento 100% offline y sincronización en la nube",
   "main": "main.js",
   "author": "NexoBar",
@@ -35,6 +35,7 @@
       "import-products.js",
       "print.js",
       "xlsx.full.min.js",
+      "supabase.min.js",
       "theme.css",
       "styles.css",
       "design.css",

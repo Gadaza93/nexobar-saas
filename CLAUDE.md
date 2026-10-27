@@ -5,7 +5,8 @@ POS para bares (antes "Brasa POS"), en español de Colombia (`es-CO`, pesos sin 
 ## Reglas técnicas
 
 - **Vanilla JS puro.** Sin frameworks, sin TypeScript, sin bundlers, transpiladores ni paso de build. Los archivos `.js` se sirven tal cual con `<script>` clásicos (no módulos ES): las funciones de nivel superior son globales y se comparten entre archivos. No introducir `import`/`export`, npm runtime deps ni herramientas de compilación.
-- Única excepción a "sin dependencias externas": `@supabase/supabase-js@2` desde jsDelivr (ver Offline). `xlsx.full.min.js` está vendorizado en la raíz.
+- Sin dependencias externas en tiempo de ejecución: `xlsx.full.min.js` y `supabase.min.js` están vendorizados en la raíz. `supabase.min.js` es el build UMD de `@supabase/supabase-js` **2.117.3** (`dist/umd/supabase.js` del tarball de npm, integridad verificada; sha256 `d6a5c4414a5d4ce646d9c1de223aa7067d3ff664c15394ffeb7fcffc763354a3`). Para actualizarlo, repetir ese proceso con una versión fija y actualizar esta línea. No volver a cargar scripts desde un CDN: la CSP lo bloquea.
+- **CSP** (meta en `index.html` y `admin.html`): `script-src 'self'` + el hash del script del tema. Si cambias ese script en línea, recalcula su hash (`sha256-…` de su contenido exacto) en ambos archivos. Nada de `<script>` en línea nuevos, atributos `on*=` ni `eval`.
 - Los scripts también se cargan en Node para las pruebas de `scratch/`: protege el acceso a `window`, `document`, `navigator` y `localStorage` con `typeof … !== 'undefined'` o `try/catch`.
 - Comentarios y textos de interfaz en español.
 
@@ -15,7 +16,7 @@ POS para bares (antes "Brasa POS"), en español de Colombia (`es-CO`, pesos sin 
 - **Archivo espejo (solo Windows).** En Electron, cada guardado se replica en `%APPDATA%\NexoBar\datos\nexobar-pos.json` (escritura atómica + `.bak` horario). Si IndexedDB está vacío, se restaura desde el espejo; `mirror:load` acepta también el antiguo `brasa-pos.json`. Respaldos en `Documentos\NexoBar\Respaldos` (o la carpeta legada `BrasaPOS\Respaldos`).
 - **Sincronización diferida (`sync.js`, objeto global `NexoSync`).** Cada registro lleva `sync_status` (`nuevo_local`/`pending` → `synced`). Se suben en lote a Supabase cuando hay conexión (`scheduleSync`, evento `online`) y se descargan con `pullAllFromSupabase`. Los datos del negocio se separan por `business_id` (por defecto `nexobar_default`).
 - **Nunca bloquear la venta por la red.** Toda operación se completa en local primero; los fallos de Supabase solo cambian el indicador de sincronización.
-- Si el CDN de Supabase no cargó (arranque en frío sin internet), `getClient()` devuelve `null`, la app trabaja offline y `loadSupabaseLib()` reintenta al volver la conexión.
+- Si `supabase.min.js` no cargó, `getClient()` devuelve `null`, la app trabaja offline y `loadSupabaseLib()` reintenta desde el mismo archivo local.
 
 ## Compatibilidad dual: PWA + Windows
 
@@ -36,9 +37,10 @@ POS para bares (antes "Brasa POS"), en español de Colombia (`es-CO`, pesos sin 
 ## Orden de carga en `index.html`
 
 En `<head>`:
-1. Script inline del tema (`nexobar-theme` / `brasa-theme` en `localStorage` → `data-theme="light"`), antes del CSS para evitar parpadeo.
-2. `supabase-js@2` (CDN).
-3. `theme.css` → `styles.css` → `design.css`.
+1. Meta CSP (primera, antes de cualquier script).
+2. Script inline del tema (`nexobar-theme` / `brasa-theme` en `localStorage` → `data-theme="light"`), antes del CSS para evitar parpadeo. Su hash está en la CSP.
+3. `supabase.min.js` (local).
+4. `theme.css` → `styles.css` → `design.css`.
 
 Al final de `<body>` (el orden importa, solo `app.js` ejecuta el arranque):
 1. `xlsx.full.min.js`

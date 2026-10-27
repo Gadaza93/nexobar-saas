@@ -128,8 +128,9 @@ function getBusinessId() {
   return DEFAULT_BUSINESS_ID;
 }
 
-// Si el CDN de Supabase no cargó (arranque en frío sin internet), se reintenta cuando vuelva la conexión.
-const SUPABASE_CDN = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+// supabase-js va empaquetado en el proyecto (supabase.min.js, versión fija; ver CLAUDE.md), ya no desde un CDN:
+// la CSP solo permite scripts propios. Si por algo no cargó, se reintenta desde el mismo archivo local.
+const SUPABASE_LIB_URL = "./supabase.min.js";
 let supabaseLibLoading = null;
 
 function hasSupabaseLib() {
@@ -144,7 +145,7 @@ function loadSupabaseLib() {
   if (!supabaseLibLoading) {
     supabaseLibLoading = new Promise(resolve => {
       const script = document.createElement("script");
-      script.src = SUPABASE_CDN;
+      script.src = SUPABASE_LIB_URL;
       script.async = true;
       script.onload = () => resolve(hasSupabaseLib());
       script.onerror = () => { script.remove(); resolve(false); };

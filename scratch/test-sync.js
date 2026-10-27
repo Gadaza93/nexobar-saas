@@ -6,7 +6,10 @@ console.log('--- TEST SUITE: NexoBar Cloud Sync Architecture ---');
 
 // 1. Verify index.html script tags and UI elements
 const indexHtml = fs.readFileSync('index.html', 'utf8');
-assert(indexHtml.includes('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2'), 'index.html must include Supabase CDN in head');
+// supabase-js va empaquetado localmente (la CSP solo permite scripts propios): en <head>, antes de sync.js, sin CDN
+assert(indexHtml.includes('<script src="./supabase.min.js"></script>'), 'index.html must load the vendored supabase.min.js');
+assert(indexHtml.indexOf('supabase.min.js') < indexHtml.indexOf('</head>'), 'supabase.min.js must load in <head>');
+assert(!/cdn\.jsdelivr|unpkg\.com/.test(indexHtml), 'index.html must not load scripts from a CDN');
 assert(indexHtml.includes('<script src="sync.js"></script>') || indexHtml.includes('<script src="./sync.js"></script>'), 'index.html must load sync.js');
 assert(indexHtml.indexOf('sync.js') < indexHtml.indexOf('app.js'), 'sync.js must load before app.js');
 assert(indexHtml.includes('id="syncStatusIndicator"'), 'index.html must include #syncStatusIndicator');

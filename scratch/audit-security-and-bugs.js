@@ -90,10 +90,26 @@ for (const file of ['preload.js', 'electron/preload.js']) {
   check('Electron', 'Alta', `${file}: expone ipcRenderer o require completos al renderer`, /exposeInMainWorld\([^)]*ipcRenderer\s*[,)]|ipcRenderer:\s*ipcRenderer|require:\s*require/.test(src));
 }
 const indexHtml = read('index.html'), adminHtml = read('admin.html');
-check('Electron/Web', 'Alta', 'index.html/admin.html: supabase-js desde CDN con versión flotante (@2) y sin integridad SRI, en la ventana que tiene el puente window.desktop',
-  /supabase-js@2"/.test(indexHtml) && !/integrity=/.test(indexHtml));
-check('Electron/Web', 'Media', 'index.html/admin.html: sin Content-Security-Policy (un XSS puede cargar scripts externos y exfiltrar el token)',
-  !/Content-Security-Policy/i.test(indexHtml) || !/Content-Security-Policy/i.test(adminHtml));
+const remoteScripts = [indexHtml, adminHtml].flatMap(h => h.match(/<script[^>]+src="https?:[^"]*"/gi) || []);
+const vendored = fs.existsSync(path.join(ROOT, 'supabase.min.js')) && /^var supabase=/.test(read('supabase.min.js').slice(0, 20));
+const swSrc = read('service-worker.js'), buildFiles = JSON.parse(read('package.json')).build.files;
+check('Electron/Web', 'Alta', 'supabase-js empaquetado localmente con versión fija (sin <script> remotos ni carga dinámica desde CDN; incluido en service worker e instalador)',
+  remoteScripts.length > 0 || /cdn\.jsdelivr|unpkg\.com/.test(read('sync.js')) || !vendored || !swSrc.includes("'./supabase.min.js'") || !buildFiles.includes('supabase.min.js'),
+  [remoteScripts.join(' '), !vendored && 'falta supabase.min.js', !swSrc.includes("'./supabase.min.js'") && 'no está en ASSETS', !buildFiles.includes('supabase.min.js') && 'no está en build.files'].filter(Boolean).join(' · '));
+const cspOf = html => (html.match(/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/i) || [])[1] || '';
+const cspIssues = [['index.html', indexHtml], ['admin.html', adminHtml]].flatMap(([name, html]) => {
+  const csp = cspOf(html), script = (csp.match(/script-src([^;]*)/) || [])[1] || '';
+  if (!csp) return [`${name}: sin CSP`];
+  return [
+    /'unsafe-inline'|'unsafe-eval'/.test(script) && `${name}: script-src permite inline/eval`,
+    /https?:|\*/.test(script) && `${name}: script-src permite hosts externos`,
+    !/object-src 'none'/.test(csp) && `${name}: falta object-src 'none'`,
+    !/default-src 'self'/.test(csp) && `${name}: falta default-src 'self'`,
+    html.indexOf('Content-Security-Policy') > html.indexOf('<script') && `${name}: la CSP va después de un script`
+  ].filter(Boolean);
+});
+check('Electron/Web', 'Media', 'index.html/admin.html: Content-Security-Policy estricta (scripts solo propios, sin inline/eval, object-src none) antes de cualquier script',
+  cspIssues.length > 0, cspIssues.join(' · '));
 check('Electron', 'Baja', 'package.json: sin @electron/fuses (RunAsNode / NODE_OPTIONS siguen habilitados en NexoBar.exe)', !/fuses/i.test(read('package.json')));
 
 // Desinfección del HTML del ticket (print.js)
