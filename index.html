@@ -67,9 +67,10 @@
 
           <div class="section-heading">
             <div><h2>Mesas y zonas</h2><p>Selecciona una mesa para tomar o continuar un pedido.</p></div>
-            <div class="section-actions"><button id="manageTablesButton" class="outline-button" data-perm="tables">Editar mesas</button><button id="newCustomOrderButton" class="outline-button">+ Cuenta personalizada</button><div class="segmented" id="zoneFilter"></div></div>
+            <div class="section-actions"><div class="segmented table-view-toggle" role="group" aria-label="Vista de mesas"><button type="button" data-table-view="plano">Plano del local</button><button type="button" data-table-view="grid">Cuadrícula compacta</button></div><button type="button" id="editFloorButton" class="outline-button floor-edit-link" data-perm="tables" title="Diseñar el plano en Mi negocio">⚙️ Editar plano</button><button id="newCustomOrderButton" class="outline-button">+ Cuenta personalizada</button><div class="segmented" id="zoneFilter"></div></div>
           </div>
           <div class="table-grid" id="tableGrid"></div>
+          <div id="tableFloorWrap" class="floorplan-wrap" hidden><div id="tableFloor" class="floorplan floorplan-live" aria-label="Plano del local"></div></div>
           <div class="section-heading custom-orders-heading"><div><h2>Cuentas abiertas</h2><p>Pedidos para llevar o cuentas separadas por cliente.</p></div></div>
           <div id="customOrdersList" class="custom-orders-list"></div>
           <div class="section-heading recent-invoices-heading" data-perm="view.invoices"><div><h2>Últimas 5 facturas</h2><p>Consulta los últimos cobros registrados para validar cualquier diferencia.</p></div></div>
@@ -186,6 +187,15 @@
           </article>
           </div>
           </div>
+          <article class="data-card floor-designer-card" id="floorDesignerCard" data-perm="tables">
+            <div class="floor-designer-head">
+              <div><h3>Mesas y distribución</h3><p class="muted">Arrastra las mesas para ubicarlas como en tu local (mouse o dedo). Toca una para renombrarla, cambiar su tipo o zona. Los cambios se aplican al pulsar «Guardar distribución».</p></div>
+              <div class="inline-actions"><button type="button" id="floorAddTable" class="outline-button">+ Mesa</button><button type="button" id="floorAddCounter" class="outline-button">+ Mostrador/Barra</button><button type="button" id="floorDiscardButton" class="outline-button" disabled>Descartar</button><button type="button" id="floorSaveButton" class="primary-button" disabled>Guardar distribución</button></div>
+            </div>
+            <div class="floorplan-wrap"><div id="floorplan-designer" class="floorplan floorplan-designer" aria-label="Diseñador del plano"></div></div>
+            <div id="floorEditor" class="floor-editor"></div>
+            <p id="floorDirtyLabel" class="muted floor-dirty"></p>
+          </article>
         </section>
 
         <section id="reports" class="view">
@@ -449,12 +459,6 @@
       <label class="field-label" for="customOrderName">Nombre para identificar la cuenta</label><input id="customOrderName" type="text" placeholder="Ej. Cuenta de Valentina" />
       <p class="muted">Podrás seguir agregando productos y editar esta cuenta hasta que decidas cobrarla.</p>
       <button id="createCustomOrderButton" class="primary-button full">Crear cuenta</button>
-    </dialog>
-
-    <dialog id="tablesDialog" class="small-dialog tables-dialog">
-      <div class="dialog-header"><div><p class="eyebrow">PUNTO DE VENTA</p><h2>Mesas y zonas</h2></div><button class="icon-button" data-close="tablesDialog" aria-label="Cerrar">×</button></div>
-      <div id="tableManagementList" class="table-management-list"></div>
-      <p class="field-label">Agregar mesa</p><div class="new-table-fields"><input id="newTableName" type="text" placeholder="Ej. Mesa 8" /><select id="newTableZone"><option>Salón</option><option>Barra</option><option>Terraza</option><option>VIP</option></select><button id="addTableButton" class="primary-button">Agregar</button></div>
     </dialog>
 
     <dialog id="menuDialog" class="small-dialog menu-dialog">

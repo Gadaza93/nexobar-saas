@@ -1401,6 +1401,7 @@ async function pullAllFromSupabase(businessId) {
       if (!negErr && negData) {
         applySubscriptionStatus(negData);
         if (typeof state !== "undefined" && state) {
+          const localFloorPlan = state.profile?.floorPlan; // antes de mezclar: la configuración remota trae su propio floorPlan
           state.profile = {
             ...state.profile,
             ...(negData.configuracion || {}),
@@ -1409,6 +1410,11 @@ async function pullAllFromSupabase(businessId) {
             syncId: bId,
             sync_status: "synced"
           };
+
+          // Plano de mesas: se aplica solo si el remoto es más reciente; si no, se conserva el local
+          if (typeof applyRemoteFloorPlan === "function") {
+            try { if (applyRemoteFloorPlan(negData.configuracion?.floorPlan, localFloorPlan) && typeof renderTables === "function") renderTables(); } catch (e) { /* ignore */ }
+          }
 
           // Hidratar estado de apertura / cierre de caja desde la configuración remota
           if (negData.configuracion && typeof negData.configuracion.cashShift === "object" && negData.configuracion.cashShift !== null) {
@@ -1957,6 +1963,16 @@ function setupRealtime() {
                 const isOpen = remoteShift.status === "open";
                 showToast(isOpen ? "🟢 Turno de caja abierto en vivo" : "🔴 Turno de caja cerrado en vivo");
               }
+            }
+
+            // Plano de mesas editado en otra caja
+            if (typeof applyRemoteFloorPlan === "function" && row.configuracion?.floorPlan) {
+              try {
+                if (applyRemoteFloorPlan(row.configuracion.floorPlan)) {
+                  if (typeof scheduleSave === "function") scheduleSave();
+                  if (typeof renderAll === "function") renderAll();
+                }
+              } catch (e) { /* ignore */ }
             }
 
             // Sincronización en vivo de comandas y mesas activas

@@ -336,6 +336,8 @@ function normalizeState(saved) {
     })
   }));
   ensureExtras(normalized);
+  // Plano de mesas: tipo y posición (posX/posY en %) para datos anteriores sin coordenadas
+  if (typeof ensureTableLayout === 'function') normalized.tables = ensureTableLayout(normalized.tables);
   return normalized;
 }
 globalThis.normalizeState = normalizeState;
@@ -558,6 +560,7 @@ function renderAll() {
   if (typeof renderReports === 'function') renderReports(); else if (typeof globalThis.renderReports === 'function') globalThis.renderReports();
   renderHistory();
   renderProfile();
+  if (typeof renderFloorDesigner === 'function') renderFloorDesigner();
   renderSubscription();
   renderPrintSettings();
   if (typeof applyPermissions === 'function') applyPermissions(); else if (typeof globalThis.applyPermissions === 'function') globalThis.applyPermissions();
@@ -585,10 +588,21 @@ function renderStats() {
 }
 function renderZones() { const zones = ['Todas', ...new Set(state.tables.map(t => t.zone))]; document.querySelector('#zoneFilter').innerHTML = zones.map(z => `<button class="segment ${state.zone === z ? 'active':''}" data-zone="${escapeHtml(z)}">${escapeHtml(z)}</button>`).join(''); }
 function elapsedLabel(ts) { const mins = Math.max(0, Math.floor((Date.now() - (ts || Date.now())) / 60000)); if (mins < 1) return 'Recién abierta'; if (mins < 60) return `Abierta hace ${mins} min`; const h = Math.floor(mins / 60), m = mins % 60; return `Abierta hace ${h} h${m ? ` ${m} min` : ''}`; }
-function renderTables() { const tables = state.tables.filter(t => state.zone === 'Todas' || t.zone === state.zone); document.querySelector('#tableGrid').innerHTML = tables.map(table => { const order = activeOrderForTable(table.id); const long = order && Date.now() - (order.createdAt || Date.now()) >= 120 * 60000; return `<button class="table-card ${order ? 'occupied':''} ${table.type || ''}" data-table="${table.id}"><span class="table-top"><span class="table-name">${escapeHtml(table.name)}</span><span class="table-zone">${escapeHtml(table.zone)}</span></span>${order ? `<span class="table-bottom"><span class="table-amount">${money.format(orderPending(order))}</span><span class="table-time ${long ? 'long' : ''}">${elapsedLabel(order.createdAt)}</span></span>` : '<span class="table-status empty">Disponible</span>'}</button>`; }).join(''); }
+function renderTables() {
+  const tables = state.tables.filter(t => state.zone === 'Todas' || t.zone === state.zone);
+  // Vista del salón: plano del local (posiciones guardadas en el diseñador) o cuadrícula compacta. Preferencia por dispositivo.
+  const plan = typeof tableViewMode === 'function' && tableViewMode() === 'plano', grid = document.querySelector('#tableGrid'), floor = document.querySelector('#tableFloorWrap');
+  document.querySelectorAll('[data-table-view]').forEach(b => b.classList.toggle('active', b.dataset.tableView === (plan ? 'plano' : 'grid')));
+  if (floor) floor.hidden = !plan;
+  if (plan && floor && typeof renderFloorLive === 'function') { grid.hidden = true; grid.innerHTML = ''; return renderFloorLive(tables); }
+  grid.hidden = false;
+  grid.innerHTML = tables.map(table => { const order = activeOrderForTable(table.id); const long = order && Date.now() - (order.createdAt || Date.now()) >= 120 * 60000; return `<button class="table-card ${order ? 'occupied':''} ${table.type || ''}" data-table="${table.id}"><span class="table-top"><span class="table-name">${escapeHtml(table.name)}</span><span class="table-zone">${escapeHtml(table.zone)}</span></span>${order ? `<span class="table-bottom"><span class="table-amount">${money.format(orderPending(order))}</span><span class="table-time ${long ? 'long' : ''}">${elapsedLabel(order.createdAt)}</span></span>` : '<span class="table-status empty">Disponible</span>'}</button>`; }).join('');
+}
 globalThis.renderShiftStatus = renderShiftStatus;
 globalThis.renderStats = renderStats;
 globalThis.renderTables = renderTables;
+globalThis.orderPending = orderPending; // el plano de mesas (modules.js) los usa
+globalThis.elapsedLabel = elapsedLabel;
 globalThis.renderCustomOrders = renderCustomOrders;
 globalThis.renderAll = renderAll;
 function renderInventory() {
@@ -893,11 +907,6 @@ function createCustomOrder() {
   renderAll();
   openCustomOrder(order.id);
 }
-function openTablesDialog() { renderTableManagement();document.querySelector('#newTableName').value='';document.querySelector('#newTableZone').value='Salón';document.querySelector('#tablesDialog').showModal(); }
-function renderTableManagement() { const zones=['Barra','Salón','Terraza','VIP'];document.querySelector('#tableManagementList').innerHTML=state.tables.map(table=>`<div class="table-management-row"><input data-table-name="${table.id}" type="text" value="${escapeHtml(table.name)}" /><select data-table-zone="${table.id}">${zones.map(zone=>`<option ${table.zone===zone?'selected':''}>${zone}</option>`).join('')}</select><button class="outline-button" data-save-table="${table.id}">Guardar</button><button class="remove-line" data-delete-table="${table.id}" aria-label="Eliminar mesa">×</button></div>`).join(''); }
-function saveTable(tableId) { const table=state.tables.find(item=>item.id===tableId),name=document.querySelector(`[data-table-name="${tableId}"]`)?.value.trim(),zone=document.querySelector(`[data-table-zone="${tableId}"]`)?.value;if(!table||!name)return showToast('La mesa necesita un nombre.');if(state.tables.some(item=>item.id!==tableId&&item.name.toLowerCase()===name.toLowerCase()))return showToast('Ya existe una mesa con ese nombre.');table.name=name;table.zone=zone;state.orders.forEach(order=>{if(order.tableId===tableId)order.tableName=name;});saveState();renderTableManagement();renderAll();showToast('Mesa actualizada.'); }
-function addTable() { const name=document.querySelector('#newTableName').value.trim(),zone=document.querySelector('#newTableZone').value;if(!name)return showToast('Escribe el nombre de la mesa.');if(state.tables.some(table=>table.name.toLowerCase()===name.toLowerCase()))return showToast('Ya existe una mesa con ese nombre.');state.tables.push({id:uid('table'),name,zone});saveState();renderTableManagement();renderAll();showToast('Mesa creada.'); }
-function deleteTable(tableId) { const table=state.tables.find(item=>item.id===tableId);if(!table)return;if(activeOrderForTable(tableId))return showToast('Cobra o elimina el pedido activo antes de eliminar esta mesa.');if(!window.confirm(`¿Eliminar ${table.name}?`))return;state.tables=state.tables.filter(item=>item.id!==tableId);saveState();renderTableManagement();renderAll();showToast('Mesa eliminada.'); }
 function productVisual(product) {
   if (!product) return '🍾';
   const src = safeImageSrc(product.image);
@@ -2162,11 +2171,7 @@ document.addEventListener('click', event => {
   if (target.dataset.deleteProduct) deleteProduct(target.dataset.deleteProduct);
   if (target.dataset.saveCategory !== undefined) saveCategory(Number(target.dataset.saveCategory));
   if (target.dataset.deleteCategory !== undefined) deleteCategory(Number(target.dataset.deleteCategory));
-  if (target.dataset.saveTable) saveTable(target.dataset.saveTable);
-  if (target.dataset.deleteTable) deleteTable(target.dataset.deleteTable);
   if (target.id === 'newOrderButton') openOrder();
-  if (target.id === 'manageTablesButton') openTablesDialog();
-  if (target.id === 'addTableButton') addTable();
   if (target.id === 'newCustomOrderButton') openCustomOrderDialog();
   if (target.id === 'createCustomOrderButton') createCustomOrder();
   if (target.id === 'saveOrderButton') saveOrder();

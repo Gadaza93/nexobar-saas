@@ -1094,6 +1094,185 @@ function printReport() {
   window.print();
 }
 
+/* ============ Plano de mesas ============
+   Cada mesa guarda tipo ('mesa' | 'mostrador') y posición del centro en % del lienzo (posX, posY de 0 a 100). El lienzo
+   es 16:10 y los tamaños también van en %, así el plano se ve igual en cualquier pantalla. Configuración (Mi negocio →
+   Mesas y distribución) trabaja sobre un borrador que solo se aplica al pulsar «Guardar distribución»; la vista operativa
+   del salón no arrastra nada: tocar una mesa abre su pedido como siempre (data-table).
+   Sincronización: la distribución viaja en state.profile.floorPlan, que ya va dentro de negocios.configuracion en todas
+   las subidas; la otra caja la aplica si su updatedAt es más reciente (applyRemoteFloorPlan). */
+const FLOOR_SIZE = { mesa: { w: 10, h: 16 }, mostrador: { w: 22, h: 11 } }; // % del ancho y % del alto del lienzo
+const TABLE_VIEW_KEY = 'nexobar-table-view';
+let floorDraft = null, floorDirty = false, floorSelected = null, floorDrag = null;
+let tableView = (() => { try { return localStorage.getItem(TABLE_VIEW_KEY) || 'plano'; } catch { return 'plano'; } })();
+function tableViewMode() { return tableView === 'grid' ? 'grid' : 'plano'; }
+function setTableView(mode) { tableView = mode === 'grid' ? 'grid' : 'plano'; try { localStorage.setItem(TABLE_VIEW_KEY, tableView); } catch { /* preferencia opcional */ } renderTables(); }
+function tableTipo(table) { return table?.tipo === 'mostrador' || (!table?.tipo && table?.type === 'bar') ? 'mostrador' : 'mesa'; }
+function clampFloorPos(tipo, x, y) {
+  const s = FLOOR_SIZE[tipo] || FLOOR_SIZE.mesa, hw = s.w / 2 + 0.5, hh = s.h / 2 + 0.5, r = v => Math.round(v * 10) / 10;
+  return { posX: r(Math.min(100 - hw, Math.max(hw, Number(x) || 0))), posY: r(Math.min(100 - hh, Math.max(hh, Number(y) || 0))) };
+}
+function floorOverlaps(a, b) {
+  const sa = FLOOR_SIZE[tableTipo(a)], sb = FLOOR_SIZE[tableTipo(b)];
+  return Math.abs(a.posX - b.posX) < (sa.w + sb.w) / 2 && Math.abs(a.posY - b.posY) < (sa.h + sb.h) / 2;
+}
+// Primer hueco libre (de arriba abajo, de izquierda a derecha); si el plano está lleno, el centro
+function findFreeFloorSpot(tables, tipo) {
+  const s = FLOOR_SIZE[tipo];
+  for (let y = s.h / 2 + 2; y <= 100 - s.h / 2; y += 4) for (let x = s.w / 2 + 2; x <= 100 - s.w / 2; x += 3) {
+    const probe = { tipo, posX: x, posY: y };
+    if (!tables.some(t => Number.isFinite(t.posX) && floorOverlaps(probe, t))) return clampFloorPos(tipo, x, y);
+  }
+  return clampFloorPos(tipo, 50, 50);
+}
+// Disposición ordenada por defecto: mostradores en la franja superior y mesas en cuadrícula debajo, agrupadas por zona
+function defaultFloorLayout(tables) {
+  const zoneOrder = [...new Set(tables.map(t => t.zone))], counters = tables.filter(t => t.tipo === 'mostrador');
+  const mesas = tables.filter(t => t.tipo !== 'mostrador').sort((a, b) => zoneOrder.indexOf(a.zone) - zoneOrder.indexOf(b.zone));
+  const cCols = Math.max(1, Math.min(4, counters.length));
+  counters.forEach((t, i) => Object.assign(t, clampFloorPos('mostrador', (i % cCols + 0.5) * 100 / cCols, 8 + Math.floor(i / cCols) * 13)));
+  const top = counters.length ? 8 + Math.ceil(counters.length / cCols) * 13 - 4 : 2;
+  const cols = Math.max(1, Math.min(8, Math.ceil(Math.sqrt(mesas.length * 1.6)))), rows = Math.max(1, Math.ceil(mesas.length / cols));
+  mesas.forEach((t, i) => Object.assign(t, clampFloorPos('mesa', (i % cols + 0.5) * 100 / cols, top + (Math.floor(i / cols) + 0.5) * (100 - top) / rows)));
+}
+function ensureTableLayout(tables) {
+  if (!Array.isArray(tables)) return [];
+  tables.forEach(t => { t.tipo = tableTipo(t); });
+  const placed = tables.filter(t => Number.isFinite(Number(t.posX)) && Number.isFinite(Number(t.posY)) && t.posX !== null && t.posY !== null && t.posX !== '' && t.posY !== '');
+  if (!placed.length) { defaultFloorLayout(tables); return tables; }
+  placed.forEach(t => Object.assign(t, clampFloorPos(t.tipo, t.posX, t.posY)));
+  tables.filter(t => !placed.includes(t)).forEach(t => Object.assign(t, findFreeFloorSpot(tables.filter(o => o !== t && Number.isFinite(o.posX)), t.tipo)));
+  return tables;
+}
+function floorItemStyle(t) { return `left:${t.posX}%;top:${t.posY}%`; }
+
+/* ---------- Vista operativa (Salón) ---------- */
+function renderFloorLive(tables) {
+  const el = document.querySelector('#tableFloor'); if (!el) return;
+  if (!tables.length) { el.innerHTML = '<p class="muted floor-empty">No hay mesas en esta zona.</p>'; return; }
+  el.innerHTML = tables.map(table => {
+    const order = activeOrderForTable(table.id), tipo = tableTipo(table), long = order && Date.now() - (order.createdAt || Date.now()) >= 120 * 60000;
+    const status = order ? `<span class="floor-amount">${money.format(orderPending(order))}</span><span class="floor-time ${long ? 'long' : ''}">${escapeHtml(elapsedLabel(order.createdAt))}</span>` : '<span class="floor-status">Disponible</span>';
+    return `<button type="button" class="floor-item ${tipo} ${order ? 'occupied' : 'free'}" data-table="${escapeHtml(table.id)}" style="${floorItemStyle(table)}" title="${escapeHtml(`${table.name} · ${table.zone}${order ? ' · ' + money.format(orderPending(order)) : ' · Disponible'}`)}"><span class="floor-name">${escapeHtml(table.name)}</span>${status}</button>`;
+  }).join('');
+}
+
+/* ---------- Diseñador (Configuración) ---------- */
+function floorTables() { return floorDraft || state.tables; }
+function beginFloorDraft() { if (!floorDraft) floorDraft = ensureTableLayout(structuredClone(state.tables)); return floorDraft; }
+function markFloorDirty() { floorDirty = true; renderFloorDesigner(); }
+function floorZones() { return [...new Set(['Salón', 'Barra', 'Terraza', 'VIP', ...floorTables().map(t => t.zone).filter(Boolean)])]; }
+function renderFloorDesigner() {
+  const canvas = document.querySelector('#floorplan-designer'); if (!canvas || floorDrag) return; // no repintar a mitad de un arrastre
+  if (!floorDirty) { floorDraft = null; if (floorSelected && !state.tables.some(t => t.id === floorSelected)) floorSelected = null; }
+  const tables = floorTables(), isDemo = typeof isDemoMode === 'function' && isDemoMode();
+  canvas.innerHTML = tables.length ? tables.map(t => `<div class="floor-item ${tableTipo(t)} ${t.id === floorSelected ? 'selected' : ''} ${activeOrderForTable(t.id) ? 'occupied' : 'free'}" data-floor-item="${escapeHtml(t.id)}" role="button" tabindex="0" aria-label="${escapeHtml(`${t.name}, ${tableTipo(t) === 'mostrador' ? 'mostrador' : 'mesa'}. Arrastra para moverla.`)}" style="${floorItemStyle(t)}"><span class="floor-name">${escapeHtml(t.name)}</span><span class="floor-zone">${escapeHtml(t.zone || '')}</span></div>`).join('')
+    : '<p class="muted floor-empty">Aún no hay mesas. Usa «+ Mesa» o «+ Mostrador/Barra».</p>';
+  const sel = tables.find(t => t.id === floorSelected), editor = document.querySelector('#floorEditor');
+  if (editor) editor.innerHTML = sel ? `<div class="floor-editor-row">
+      <label><span class="field-label">Nombre</span><input id="floorItemName" type="text" maxlength="40" value="${escapeHtml(sel.name)}" /></label>
+      <label><span class="field-label">Zona</span><select id="floorItemZone">${floorZones().map(z => `<option ${z === sel.zone ? 'selected' : ''}>${escapeHtml(z)}</option>`).join('')}</select></label>
+      <div><span class="field-label">Tipo</span><div class="segmented floor-tipo">${[['mesa', 'Mesa cuadrada'], ['mostrador', 'Barra alargada']].map(([v, l]) => `<button type="button" data-floor-tipo="${v}" class="${tableTipo(sel) === v ? 'active' : ''}">${l}</button>`).join('')}</div></div>
+      <button type="button" id="floorDeleteItem" class="danger-outline-button floor-delete" ${activeOrderForTable(sel.id) || isDemo ? 'disabled' : ''} title="${activeOrderForTable(sel.id) ? 'Tiene un pedido abierto: cóbralo o elimínalo primero' : isDemo ? 'En el modo demo el número de mesas es fijo' : 'Eliminar esta mesa'}">Eliminar</button>
+    </div>` : '<p class="muted">Selecciona una mesa del plano para editarla.</p>';
+  ['#floorAddTable', '#floorAddCounter'].forEach(id => { const b = document.querySelector(id); if (b) { b.disabled = isDemo; b.title = isDemo ? 'En el modo demo el número de mesas es fijo' : ''; } });
+  renderFloorStatus();
+}
+// Botones Guardar/Descartar y aviso de cambios pendientes (sin repintar el lienzo ni el editor)
+function renderFloorStatus() {
+  const tables = floorTables(), label = document.querySelector('#floorDirtyLabel');
+  ['#floorSaveButton', '#floorDiscardButton'].forEach(id => { const b = document.querySelector(id); if (b) b.disabled = !floorDirty; });
+  if (label) label.textContent = floorDirty ? 'Cambios sin guardar: pulsa «Guardar distribución» para aplicarlos en el salón y en las demás cajas.' : `${tables.length} ${tables.length === 1 ? 'elemento' : 'elementos'} en el plano.`;
+}
+function addFloorItem(tipo) {
+  if (typeof isDemoMode === 'function' && isDemoMode()) return showToast('En el modo demo el número de mesas es fijo.');
+  const draft = beginFloorDraft(), base = tipo === 'mostrador' ? 'Barra' : 'Mesa', re = new RegExp(`^${base}\\s+(\\d+)$`, 'i');
+  const n = 1 + Math.max(0, ...draft.map(t => Number(String(t.name).trim().match(re)?.[1]) || 0)); // sigue la numeración: Mesa 4 → Mesa 5
+  const item = { id: uid('table'), name: `${base} ${n}`, zone: tipo === 'mostrador' ? 'Barra' : 'Salón', tipo, type: tipo === 'mostrador' ? 'bar' : undefined, ...findFreeFloorSpot(draft, tipo) };
+  draft.push(item); floorSelected = item.id; markFloorDirty();
+}
+function deleteFloorItem() {
+  if (typeof isDemoMode === 'function' && isDemoMode()) return showToast('En el modo demo el número de mesas es fijo.');
+  const draft = beginFloorDraft(), item = draft.find(t => t.id === floorSelected); if (!item) return;
+  if (activeOrderForTable(item.id)) return showToast('Cobra o elimina el pedido activo antes de eliminar esta mesa.');
+  if (!window.confirm(`¿Eliminar ${item.name} del plano?`)) return;
+  floorDraft = draft.filter(t => t.id !== item.id); floorSelected = null; markFloorDirty();
+}
+function updateFloorSelected(changes) { const item = beginFloorDraft().find(t => t.id === floorSelected); if (!item) return null; Object.assign(item, changes); floorDirty = true; return item; }
+function setFloorTipo(tipo) { const item = updateFloorSelected({ tipo, type: tipo === 'mostrador' ? 'bar' : undefined }); if (item) { Object.assign(item, clampFloorPos(tipo, item.posX, item.posY)); renderFloorDesigner(); } }
+function discardFloorLayout() { floorDraft = null; floorDirty = false; renderFloorDesigner(); showToast('Cambios del plano descartados.'); }
+function floorPlanSnapshot() { return { updatedAt: Date.now(), tables: state.tables.map(t => ({ id: t.id, name: t.name, zone: t.zone, tipo: tableTipo(t), posX: t.posX, posY: t.posY })) }; }
+function saveFloorLayout() {
+  if (!floorDirty || !floorDraft) return showToast('No hay cambios en la distribución.');
+  const draft = floorDraft.map(t => ({ ...t, name: String(t.name || '').trim() }));
+  if (draft.some(t => !t.name)) return showToast('Todas las mesas necesitan un nombre.');
+  const seen = new Set(); for (const t of draft) { const k = t.name.toLowerCase(); if (seen.has(k)) return showToast(`Hay dos mesas llamadas «${t.name}».`); seen.add(k); }
+  const removed = state.tables.filter(t => !draft.some(d => d.id === t.id));
+  const busy = removed.find(t => activeOrderForTable(t.id)); if (busy) return showToast(`${busy.name} tiene un pedido abierto: cóbralo o elimínalo antes de quitarla.`);
+  state.tables = draft.map(t => { const tipo = tableTipo(t), out = { ...t, tipo, ...clampFloorPos(tipo, t.posX, t.posY) }; if (tipo === 'mostrador') out.type = 'bar'; else if (out.type === 'bar' || out.type === undefined) delete out.type; return out; });
+  state.orders.forEach(o => { const t = state.tables.find(x => x.id === o.tableId); if (t && o.tableName !== t.name) { o.tableName = t.name; o.sync_status = 'pending'; } });
+  state.profile = { ...state.profile, floorPlan: floorPlanSnapshot(), sync_status: 'pending' };
+  if (typeof logAudit === 'function') logAudit('Plano de mesas', `${state.tables.length} elementos · ${removed.length ? removed.length + ' eliminados' : 'sin eliminaciones'}`);
+  floorDraft = null; floorDirty = false;
+  saveState(); renderAll(); showToast('Distribución guardada.');
+}
+// Aplica la distribución que llegó de otra caja si es más reciente que la local. Las mesas locales con pedido abierto que el plano remoto no trae se conservan.
+function applyRemoteFloorPlan(remote, localPlan = state.profile?.floorPlan) {
+  if (typeof isDemoMode === 'function' && isDemoMode()) return false;
+  if (!remote || !Array.isArray(remote.tables) || !remote.tables.length) return false;
+  if ((Number(remote.updatedAt) || 0) <= (Number(localPlan?.updatedAt) || 0)) { if (localPlan && state.profile) state.profile.floorPlan = localPlan; return false; }
+  const incoming = remote.tables.filter(r => r && r.id).map(r => { const tipo = r.tipo === 'mostrador' ? 'mostrador' : 'mesa', t = { id: String(r.id), name: String(r.name || 'Mesa').slice(0, 40), zone: String(r.zone || 'Salón').slice(0, 40), tipo, posX: Number(r.posX), posY: Number(r.posY) }; if (tipo === 'mostrador') t.type = 'bar'; return t; });
+  const kept = state.tables.filter(t => activeOrderForTable(t.id) && !incoming.some(r => r.id === t.id));
+  state.tables = ensureTableLayout([...incoming, ...kept]);
+  if (state.profile) state.profile.floorPlan = remote;
+  if (!floorDirty) floorDraft = null;
+  return true;
+}
+function handleFloorPointerDown(event) {
+  const item = event.target.closest?.('[data-floor-item]'), canvas = item?.closest('#floorplan-designer');
+  if (!item || !canvas || event.button > 0) return;
+  const t = beginFloorDraft().find(x => x.id === item.dataset.floorItem); if (!t) return;
+  event.preventDefault();
+  floorDrag = { id: t.id, el: item, canvas, rect: canvas.getBoundingClientRect(), x0: event.clientX, y0: event.clientY, px: t.posX, py: t.posY, moved: false, pointerId: event.pointerId };
+  try { item.setPointerCapture(event.pointerId); } catch { /* opcional */ }
+  item.classList.add('dragging');
+}
+function handleFloorPointerMove(event) {
+  if (!floorDrag || event.pointerId !== floorDrag.pointerId) return;
+  const dx = event.clientX - floorDrag.x0, dy = event.clientY - floorDrag.y0;
+  if (!floorDrag.moved && Math.hypot(dx, dy) < 4) return; // un toque no mueve la mesa
+  floorDrag.moved = true;
+  const t = floorDraft?.find(x => x.id === floorDrag.id); if (!t) return;
+  Object.assign(t, clampFloorPos(tableTipo(t), floorDrag.px + dx / floorDrag.rect.width * 100, floorDrag.py + dy / floorDrag.rect.height * 100));
+  floorDrag.el.style.left = `${t.posX}%`; floorDrag.el.style.top = `${t.posY}%`;
+}
+function handleFloorPointerUp(event) {
+  if (!floorDrag || event.pointerId !== floorDrag.pointerId) return;
+  const { id, moved } = floorDrag; floorDrag = null;
+  floorSelected = id; if (moved) floorDirty = true;
+  renderFloorDesigner();
+}
+// Teclado: con una mesa enfocada, las flechas la mueven 1 % (5 % con Shift)
+function handleFloorKeys(event) {
+  const item = event.target.closest?.('[data-floor-item]'); if (!item || !item.closest('#floorplan-designer')) return;
+  const step = event.shiftKey ? 5 : 1, moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }, mv = moves[event.key];
+  if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); floorSelected = item.dataset.floorItem; return renderFloorDesigner(); }
+  if (!mv) return;
+  event.preventDefault();
+  const t = beginFloorDraft().find(x => x.id === item.dataset.floorItem); if (!t) return;
+  floorSelected = t.id; Object.assign(t, clampFloorPos(tableTipo(t), t.posX + mv[0], t.posY + mv[1])); floorDirty = true;
+  renderFloorDesigner(); document.querySelector(`[data-floor-item="${CSS.escape(t.id)}"]`)?.focus();
+}
+function openFloorDesigner() {
+  document.querySelector('.nav-link[data-view="profile"]')?.click();
+  setTimeout(() => document.querySelector('#floorDesignerCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+}
+globalThis.ensureTableLayout = ensureTableLayout;
+globalThis.tableViewMode = tableViewMode;
+globalThis.renderFloorLive = renderFloorLive;
+globalThis.renderFloorDesigner = renderFloorDesigner;
+globalThis.applyRemoteFloorPlan = applyRemoteFloorPlan;
+
 /* ============ Eventos y arranque ============ */
 function handleModuleClick(event) {
   const t = event.target.closest('button'); if (!t) return; const d = t.dataset;
@@ -1108,12 +1287,16 @@ function handleModuleClick(event) {
   if (d.editSupplier) return openSupplierDialog(d.editSupplier);
   if (d.deleteSupplier) return deleteSupplier(d.deleteSupplier);
   if (d.reportTab) { reportTab = d.reportTab; return applyReportTab(); }
+  if (d.tableView) return setTableView(d.tableView);
+  if (d.floorTipo) return setFloorTipo(d.floorTipo);
   if (d.netRange) { if (d.netRange === 'custom' && !netFrom) ({ from: netFrom, to: netTo } = netBounds()); netRange = d.netRange; return renderNetProfit(); } // el personalizado arranca con el rango que se estaba viendo
   const actions = {
     loginBackButton: () => { loginTarget = null; loginPin = ''; setLoginError(''); renderLogin(); }, userChip: openSessionDialog, logoutButton: showLogin, changePinButton: () => openPinDialog(false), savePinButton: savePin,
     newUserButton: () => openUserDialog(), saveUserButton: saveUser, saveInvoiceButton: saveInvoiceEdit, invoiceAddButton: addInvoiceLine, invoiceAddTender: () => { if (!invoiceDraft) return; invoiceDraft.tenders.push({ method: 'Nequi', amount: 0 }); renderInvoiceTenders(); }, confirmDeleteInvoiceButton: confirmDeleteInvoice,
     invoiceTodayButton: () => { invoiceFilter.date = ''; renderInvoices(); }, invoiceAllButton: () => { invoiceFilter.date = 'all'; renderInvoices(); },
     newSupplierButton: () => openSupplierDialog(), saveSupplierButton: saveSupplier, newWasteButton: openWasteDialog, saveWasteButton: saveWaste, newCountButton: openCountDialog, applyCountButton: applyCount,
+    editFloorButton: openFloorDesigner, floorAddTable: () => addFloorItem('mesa'), floorAddCounter: () => addFloorItem('mostrador'),
+    floorDeleteItem: () => deleteFloorItem(), floorSaveButton: () => saveFloorLayout(), floorDiscardButton: discardFloorLayout,
     exportXlsxButton: exportReportXlsx, exportInventoryXlsxButton: exportInventoryXlsx, printReportButton: printReport,
     downloadTemplateBtn: () => globalThis.downloadProductTemplate && globalThis.downloadProductTemplate(),
     importProductsBtn: () => globalThis.openImportProductsDialog && globalThis.openImportProductsDialog(),
@@ -1126,6 +1309,7 @@ function handleModuleClick(event) {
 }
 function handleModuleInput(event) {
   const t = event.target;
+  if (t.id === 'floorItemName') { const item = updateFloorSelected({ name: t.value }); if (item) { const label = document.querySelector(`[data-floor-item="${CSS.escape(item.id)}"] .floor-name`); if (label) label.textContent = t.value; renderFloorStatus(); } }
   if (t.dataset.invLine !== undefined && invoiceDraft) {
     const item = invoiceDraft.items[Number(t.dataset.invLine)]; if (!item) return; item[t.dataset.invField] = t.value === '' ? 0 : Number(t.value);
     const row = t.closest('.invoice-line'); if (row) row.querySelector('b').textContent = money.format((Number(item.price) || 0) * (Number(item.qty) || 0));
@@ -1139,6 +1323,7 @@ function handleModuleInput(event) {
 }
 function handleModuleChange(event) {
   const t = event.target;
+  if (t.id === 'floorItemZone') { if (updateFloorSelected({ zone: t.value })) renderFloorDesigner(); }
   if (t.dataset.invTender !== undefined && t.dataset.invTenderField === 'method' && invoiceDraft) { const tender = invoiceDraft.tenders[Number(t.dataset.invTender)]; if (tender) tender.method = t.value; }
   if (t.id === 'wasteItem') updateWasteValue();
   if (t.id === 'invoiceDate') { invoiceFilter.date = t.value || 'all'; renderInvoices(); }
@@ -1154,13 +1339,14 @@ function initModules() {
   ['openPayment', 'confirmPayment'].forEach(n => guard(n, 'charge'));
   ['openShiftDialog', 'openCloseDialog', 'confirmOpenShift', 'confirmClose'].forEach(n => guard(n, 'shift'));
   ['openProductDialog', 'saveProduct', 'deleteProduct', 'openImportProductsDialog'].forEach(n => guard(n, 'products'));
-  ['openTablesDialog', 'addTable', 'saveTable', 'deleteTable'].forEach(n => guard(n, 'tables'));
+  ['addFloorItem', 'deleteFloorItem', 'saveFloorLayout'].forEach(n => guard(n, 'tables'));
   ['openCategoriesDialog', 'addCategory', 'saveCategory', 'deleteCategory'].forEach(n => guard(n, 'categories'));
   ['saveProfile'].forEach(n => guard(n, 'profile')); ['exportBackup', 'importBackup'].forEach(n => guard(n, 'backup'));
   ['openPurchaseDialog', 'savePurchase', 'openExpenseDialog', 'saveExpense'].forEach(n => guard(n, 'purchases'));
   ['openInventoryDialog', 'saveInventory'].forEach(n => guard(n, 'inventory')); guard('deleteCurrentOrder', 'cancelOrder');
   const closeShift = globalThis.confirmClose; // al cerrar caja se respalda toda la base de datos
   globalThis.confirmClose = function (...args) { const wasOpen = isShiftOpen(), result = closeShift.apply(this, args); if (wasOpen && !isShiftOpen() && backupSettings().onClose) runBackup('Cierre de caja', 'cierre', true); return result; };
+  document.addEventListener('pointerdown', handleFloorPointerDown); document.addEventListener('pointermove', handleFloorPointerMove); document.addEventListener('pointerup', handleFloorPointerUp); document.addEventListener('pointercancel', handleFloorPointerUp); document.addEventListener('keydown', handleFloorKeys);
   document.addEventListener('click', handleModuleClick); document.addEventListener('input', handleModuleInput); document.addEventListener('change', handleModuleChange); document.addEventListener('keydown', handleLoginKeys);
   document.querySelector('#loginDialog').addEventListener('cancel', e => e.preventDefault());
   document.querySelector('#pinDialog').addEventListener('cancel', e => { if (forcedPinChange) e.preventDefault(); });
