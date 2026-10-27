@@ -15,10 +15,10 @@ if (!cssContent.includes('repeat(auto-fill, minmax(150px, 1fr))')) {
 console.log("   ✅ .product-grid configurado con auto-fill minmax(150px, 1fr)");
 
 // B. Product Card Layout
-if (!cssContent.includes('min-height: 130px;') || !cssContent.includes('gap: 8px;')) {
-  throw new Error("CSS Error: .product o .product-card no tiene 'min-height: 130px;' o 'gap: 8px;'");
+if (!cssContent.includes('min-height: 236px;') || !cssContent.includes('border-radius: 16px;') || !cssContent.includes('flex-direction: column;')) {
+  throw new Error("CSS Error: .product o .product-card no tiene 'min-height: 236px;', 'border-radius: 16px;' o flex column");
 }
-console.log("   ✅ .product / .product-card configurado con min-height: 130px, flex column y gap: 8px");
+console.log("   ✅ .product / .product-card vertical: min-height 236px, flex column y border-radius 16px");
 
 // C. Product Title
 if (!cssContent.includes('-webkit-line-clamp: 2;') || !cssContent.includes('font-weight: 600;')) {
@@ -27,10 +27,10 @@ if (!cssContent.includes('-webkit-line-clamp: 2;') || !cssContent.includes('font
 console.log("   ✅ .product-title configurado con -webkit-line-clamp: 2 y font-weight: 600");
 
 // D. Product Footer Row
-if (!cssContent.includes('justify-content: space-between;') || !cssContent.includes('align-items: center;')) {
-  throw new Error("CSS Error: .product-footer-row no tiene display flex justify-content space-between y align-items center");
+if (!cssContent.includes('.product-media {') || !cssContent.includes('height: 108px;') || !cssContent.includes('object-fit: contain;') || !cssContent.includes('.product-divider {')) {
+  throw new Error("CSS Error: falta .product-media (108px, object-fit: contain) o .product-divider");
 }
-console.log("   ✅ .product-footer-row configurado con flex, space-between y align-items center");
+console.log("   ✅ .product-media de 108px con object-fit: contain y .product-divider");
 
 // E. Mobile Breakpoint 768px
 if (!cssContent.includes('@media (max-width: 768px)') && !cssContent.includes('@media(max-width:768px)')) {

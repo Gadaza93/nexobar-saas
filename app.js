@@ -979,15 +979,12 @@ function renderOrderDialog() {
 
       return `
         <button type="button" class="product ${isOutOfStock ? 'is-out-of-stock' : ''}" data-product="${escapeHtml(p.id)}" title="${escapeHtml(p.name || 'Producto')}">
-          <div class="product-header-row">
-            <span class="product-icon">${productVisual(p)}</span>
-            <span class="product-category-chip">${escapeHtml(p.category || 'General')}</span>
-          </div>
+          <span class="product-media ${safeImageSrc(p.image) ? 'has-photo' : ''}">${productVisual(p)}</span>
+          <span class="product-category-chip">${escapeHtml(p.category || 'General')}</span>
           <strong class="product-title">${escapeHtml(p.name || 'Producto')}</strong>
-          <div class="product-footer-row">
-            <span class="product-price">${money.format(p.price || 0)}</span>
-            ${stockBadge}
-          </div>
+          <span class="product-divider" aria-hidden="true"></span>
+          <span class="product-price">${money.format(p.price || 0)}</span>
+          ${stockBadge}
         </button>
       `;
     }).join('');
@@ -1668,7 +1665,54 @@ function renderCategoryList() { document.querySelector('#categoryList').innerHTM
 function addCategory() { const category=document.querySelector('#newCategoryName').value.trim();if(!category)return showToast('Escribe un nombre de categoría.');if(state.categories.some(item=>item.toLowerCase()===category.toLowerCase()))return showToast('Esa categoría ya existe.');state.categories.push(category);saveState();document.querySelector('#newCategoryName').value='';renderCategoryList();renderCategoryOptions();showToast('Categoría creada.'); }
 function saveCategory(index) { const oldCategory=state.categories[index], nextCategory=document.querySelector(`#categoryName-${index}`).value.trim();if(!nextCategory)return showToast('La categoría necesita un nombre.');if(state.categories.some((item,itemIndex)=>itemIndex!==index&&item.toLowerCase()===nextCategory.toLowerCase()))return showToast('Ya existe una categoría con ese nombre.');state.categories[index]=nextCategory;state.products.forEach(product=>{if(product.category===oldCategory)product.category=nextCategory;});saveState();renderCategoryList();renderAll();showToast('Categoría actualizada.'); }
 function deleteCategory(index) { const category=state.categories[index];if(state.categories.length===1)return showToast('Debe existir al menos una categoría.');if(!window.confirm(`¿Eliminar la categoría ${category}? Sus productos quedarán en “Otros”.`))return;state.categories.splice(index,1);if(!state.categories.includes('Otros'))state.categories.push('Otros');state.products.forEach(product=>{if(product.category===category)product.category='Otros';});saveState();renderCategoryList();renderAll();showToast('Categoría eliminada.'); }
-function readLocalImage(file,onLoad) { if(!file)return;if(!file.type.startsWith('image/'))return showToast('Selecciona un archivo de imagen.');if(file.size>1500000)return showToast('Usa una imagen de máximo 1,5 MB.');const reader=new FileReader();reader.onload=()=>onLoad(reader.result);reader.readAsDataURL(file); }
+/* Imágenes de producto y logo: se aceptan fotos de celular de hasta 5 MB, pero se guardan livianas en IndexedDB.
+   Si pasan de 600 px por lado o pesan más de ~100 KB, se redimensionan en un canvas (máx. 600×600, sin deformar) y se
+   recomprimen en WebP al 85 % (JPEG si el navegador no codifica WebP), bajando calidad y tamaño hasta quedar bajo el
+   límite. El resultado siempre pasa por safeImageSrc antes de usarse. */
+const IMAGE_MAX_BYTES = 5 * 1024 * 1024, IMAGE_MAX_SIDE = 600, IMAGE_TARGET_CHARS = 100 * 1024; // tope del texto base64 que se guarda en IndexedDB
+function readLocalImage(file,onLoad) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) return showToast('Selecciona un archivo de imagen.');
+  if (file.size > IMAGE_MAX_BYTES) return showToast('Usa una imagen de máximo 5 MB.');
+  optimizeImageFile(file).then(dataUrl => {
+    const src = safeImageSrc(dataUrl);
+    if (!src) return showToast('No se pudo leer la imagen. Prueba con otra foto (JPG, PNG o WebP).');
+    onLoad(src);
+  }).catch(() => showToast('No se pudo procesar la imagen. Prueba con otra foto.'));
+}
+function readFileAsDataURL(file) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file); }); }
+function loadImageElement(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('imagen inválida')); };
+    img.src = url;
+  });
+}
+async function optimizeImageFile(file) {
+  const img = await loadImageElement(file), w0 = img.naturalWidth || img.width, h0 = img.naturalHeight || img.height;
+  if (!w0 || !h0) { if (file.size * 4 / 3 <= IMAGE_TARGET_CHARS) return readFileAsDataURL(file); throw new Error('imagen sin dimensiones'); } // p. ej. SVG sin width/height
+  // Ya pequeña en medidas y en peso: se guarda tal cual (conserva PNG/SVG con transparencia)
+  if (w0 <= IMAGE_MAX_SIDE && h0 <= IMAGE_MAX_SIDE && file.size * 4 / 3 <= IMAGE_TARGET_CHARS) return readFileAsDataURL(file);
+  const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d');
+  if (!ctx) return readFileAsDataURL(file);
+  let side = IMAGE_MAX_SIDE, best = '';
+  for (let pass = 0; pass < 4; pass++, side = Math.round(side * 0.75)) {
+    const scale = Math.min(1, side / Math.max(w0, h0)), w = Math.max(1, Math.round(w0 * scale)), h = Math.max(1, Math.round(h0 * scale));
+    canvas.width = w; canvas.height = h;
+    for (const quality of [0.85, 0.75, 0.65]) {
+      ctx.clearRect(0, 0, w, h); ctx.drawImage(img, 0, 0, w, h);
+      let out = canvas.toDataURL('image/webp', quality);
+      if (!out.startsWith('data:image/webp')) { // sin codificador WebP: JPEG sobre fondo blanco (JPEG no tiene transparencia)
+        ctx.save(); ctx.globalCompositeOperation = 'destination-over'; ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, w, h); ctx.restore();
+        out = canvas.toDataURL('image/jpeg', quality);
+      }
+      best = out;
+      if (out.length <= IMAGE_TARGET_CHARS) return out;
+    }
+  }
+  return best; // la versión más reducida, aunque pase un poco del objetivo
+}
 function saveProfile() { const name=document.querySelector('#businessName').value.trim(),nit=document.querySelector('#businessNit')?document.querySelector('#businessNit').value.trim():(state.profile?.nit || ''),address=document.querySelector('#businessAddress').value.trim(),phone=document.querySelector('#businessPhone').value.trim(),ownerPhone=document.querySelector('#businessOwnerPhone')?.value.trim() || '+57',syncId=state.terminal?.businessId || document.querySelector('#businessSyncId')?.value.trim() || 'nexobar_default';if(!name)return showToast('Indica el nombre del negocio.');state.profile={...state.profile,name,nit,address,phone,ownerPhone,syncId,sync_status:'pending',image:pendingBusinessImage ?? state.profile.image};saveState();renderAll();showToast('Información del negocio guardada.'); }
 function openPurchaseDialog() { if(!requireOpenShift())return;if(!state.products.length) return showToast('Crea primero un producto.'); const product=state.products[0];purchaseDraft=[{productId:product.id,qty:1,unitCost:defaultUnitCost(product)}]; document.querySelector('#purchaseSupplier').value='';document.querySelector('#purchaseInvoice').value='';document.querySelector('#purchaseDate').value=today();document.querySelector('#purchaseMethod').value='Efectivo';renderPurchaseLines();document.querySelector('#purchaseDialog').showModal(); }
 function renderPurchaseLines() { const selectOptions=state.products.map(product=>`<option value="${product.id}">${escapeHtml(product.name)} · costo prom. ${money.format(product.cost || 0)}</option>`).join(''); document.querySelector('#purchaseLines').innerHTML=purchaseDraft.map((line,index)=>`<div class="purchase-line"><select data-purchase-index="${index}" data-purchase-field="productId">${selectOptions}</select><input data-purchase-index="${index}" data-purchase-field="qty" type="number" min="0.1" step="0.1" value="${line.qty}" aria-label="Cantidad" /><input data-purchase-index="${index}" data-purchase-field="unitCost" type="number" min="0" value="${line.unitCost}" aria-label="Costo unitario" /><button class="remove-line" data-remove-purchase-line="${index}" aria-label="Eliminar producto">×</button></div>`).join(''); purchaseDraft.forEach((line,index)=>{const select=document.querySelector(`[data-purchase-index="${index}"][data-purchase-field="productId"]`);if(select)select.value=line.productId;}); updatePurchaseTotal(); }

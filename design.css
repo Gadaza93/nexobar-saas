@@ -168,11 +168,7 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 .ticket-head span::first-letter { text-transform: uppercase; }
 .ticket-items > * { border-bottom: 1px dashed var(--line-strong); }
 .ticket-total { border-top: 1px dashed var(--line-strong); }
-.product-grid > button { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; color: var(--text); transition: border-color .15s, transform .12s, background .15s; }
-.product-grid > button:hover { border-color: var(--accent-line); background: var(--accent-soft); transform: translateY(-2px); }
-.product-grid > button:active { transform: scale(.98); }
-.product-grid > button * { color: inherit; }
-.product-grid > button strong { color: var(--text); }
+.product-grid { gap: 14px; } /* la tarjeta .product se define en styles.css */
 .category-tabs button { background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2); }
 .category-tabs button.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .search-wrap input { background: var(--surface-2); }
