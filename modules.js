@@ -276,7 +276,7 @@ function draftTotal() { return (invoiceDraft?.items || []).reduce((s, i) => s + 
 function openInvoiceEdit(id) {
   if (!can('invoiceEdit')) return deny();
   const payment = state.payments.find(p => p.id === id); if (!payment) return;
-  invoiceDraft = { id, customer: payment.customer || '', method: payment.method, items: structuredClone(payment.items || []) };
+  invoiceDraft = { id, customer: payment.customer || '', method: payment.method, items: structuredClone(payment.items || []), tenders: invoiceTendersOf(payment) };
   document.querySelector('#invoiceDialogNo').textContent = payment.invoiceNo || 'FACTURA';
   document.querySelector('#invoiceCustomer').value = invoiceDraft.customer;
   const standardMethods = ['Efectivo', 'Nequi', 'Daviplata', 'Tarjeta / Datáfono', 'Transferencia'];
@@ -288,11 +288,45 @@ function openInvoiceEdit(id) {
   warning.hidden = !closedShift; warning.textContent = closedShift ? 'Esta factura pertenece a un turno de caja que ya cerró. El cierre guardado de ese turno no se recalcula; la corrección sí queda en reportes y bitácora.' : '';
   renderInvoiceDraft(); document.querySelector('#invoiceDialog').showModal();
 }
+/* Desglose de pagos de una factura. La caja (cashSalesToday / otherSalesToday), el arqueo Z y el reporte de WhatsApp
+   suman payment.payments: toda corrección reescribe ese desglose junto con payment.method y payment.amount. */
+function invoiceTendersOf(payment) {
+  const list = Array.isArray(payment.payments) && payment.payments.length ? payment.payments : [{ method: payment.method || 'Efectivo', amount: payment.amount }];
+  return list.map(t => ({ method: t.method, amount: Number(t.amount) || 0, received: Number(t.received) || Number(t.amount) || 0, change: Number(t.change) || 0 }));
+}
+// Un solo medio: el monto sigue al total (en efectivo se conserva lo recibido si alcanza). Pago mixto: las filas editadas.
+function rebuildInvoiceTenders(original, draftTenders, method, total) {
+  if (draftTenders.length <= 1) {
+    const prev = original[0], keepCash = method === 'Efectivo' && prev?.method === 'Efectivo' && prev.received >= total;
+    return [{ method, amount: total, received: keepCash ? prev.received : total, change: keepCash ? prev.received - total : 0 }];
+  }
+  return draftTenders.map((t, i) => {
+    const prev = original[i];
+    return prev && prev.method === t.method && prev.amount === t.amount ? { ...prev } : { method: t.method, amount: t.amount, received: t.amount, change: 0 };
+  });
+}
+function tendersMethodLabel(tenders) { return tenders.length === 1 ? tenders[0].method : tenders.map(t => t.method).join(' + '); }
+function renderInvoiceTenders() {
+  const box = document.querySelector('#invoiceTendersBox'); if (!box || !invoiceDraft) return;
+  const mixed = invoiceDraft.tenders.length > 1, select = document.querySelector('#invoiceMethodEdit');
+  box.hidden = !mixed; if (select) select.disabled = mixed;
+  if (!mixed) return;
+  const methods = Array.from(new Set([...(typeof PAYMENT_METHODS !== 'undefined' ? PAYMENT_METHODS : ['Efectivo']), ...invoiceDraft.tenders.map(t => t.method)].filter(Boolean)));
+  document.querySelector('#invoiceTenders').innerHTML = invoiceDraft.tenders.map((t, i) => `<div class="invoice-tender-row"><select data-inv-tender="${i}" data-inv-tender-field="method" aria-label="Medio de pago">${methods.map(m => `<option ${m === t.method ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('')}</select><input type="number" min="0" step="100" value="${t.amount}" data-inv-tender="${i}" data-inv-tender-field="amount" aria-label="Monto" /><button class="remove-line" data-remove-inv-tender="${i}" title="Quitar este medio">×</button></div>`).join('');
+  renderInvoiceTendersStatus();
+}
+function renderInvoiceTendersStatus() {
+  const el = document.querySelector('#invoiceTendersStatus'); if (!el || !invoiceDraft || invoiceDraft.tenders.length < 2) return;
+  const sum = invoiceDraft.tenders.reduce((s, t) => s + (Number(t.amount) || 0), 0), total = draftTotal(), diff = total - sum;
+  el.textContent = diff === 0 ? `El desglose cuadra con el total (${money.format(total)}).` : `El desglose suma ${money.format(sum)}: ${diff > 0 ? 'faltan' : 'sobran'} ${money.format(Math.abs(diff))} para el total de ${money.format(total)}.`;
+  el.className = diff === 0 ? 'muted' : 'warn-text';
+}
 function renderInvoiceDraft() {
   if (!invoiceDraft) return; const original = state.payments.find(p => p.id === invoiceDraft.id), total = draftTotal(), diff = total - (original?.amount || 0);
   document.querySelector('#invoiceLines').innerHTML = invoiceDraft.items.map((item, index) => `<div class="invoice-line"><strong>${escapeHtml(item.name)}</strong><input type="number" min="0" step="1" value="${item.qty}" data-inv-line="${index}" data-inv-field="qty" aria-label="Cantidad" /><input type="number" min="0" step="100" value="${item.price}" data-inv-line="${index}" data-inv-field="price" aria-label="Precio unitario" /><b>${money.format((Number(item.price) || 0) * (Number(item.qty) || 0))}</b><button class="remove-line" data-remove-inv-line="${index}" aria-label="Quitar producto">×</button></div>`).join('');
   document.querySelector('#invoiceNewTotal').textContent = money.format(total);
   document.querySelector('#invoiceDiff').textContent = diff === 0 ? 'El total no cambia.' : `Total original ${money.format(original?.amount || 0)} · diferencia ${diff > 0 ? '+' : '−'}${money.format(Math.abs(diff))}`;
+  renderInvoiceTenders();
 }
 function addInvoiceLine() {
   if (!invoiceDraft) return; const product = state.products.find(p => p.id === document.querySelector('#invoiceAddProduct').value); if (!product) return;
@@ -305,16 +339,34 @@ function saveInvoiceEdit() {
   const payment = state.payments.find(p => p.id === invoiceDraft.id); if (!payment) return;
   const reason = document.querySelector('#invoiceReason').value.trim();
   if (reason.length < 3) return showToast('Escribe el motivo de la corrección.');
-  const items = invoiceDraft.items.map(i => ({ ...i, qty: Number(i.qty) || 0, price: Number(i.price) || 0 })).filter(i => i.qty > 0);
-  if (!items.length) return showToast('La factura necesita al menos un producto. Si todo fue un error, elimínala.');
-  if (items.some(i => !Number.isInteger(i.qty) || i.price < 0)) return showToast('Las cantidades deben ser enteras y los precios no pueden ser negativos.');
-  const before = { customer: payment.customer, method: payment.method, amount: payment.amount, items: structuredClone(payment.items || []) };
-  const oldQty = {}, newQty = {}, sample = {};
-  before.items.forEach(i => { oldQty[i.productId] = (oldQty[i.productId] || 0) + i.qty; sample[i.productId] = i; });
-  items.forEach(i => { newQty[i.productId] = (newQty[i.productId] || 0) + i.qty; sample[i.productId] = i; });
-  new Set([...Object.keys(oldQty), ...Object.keys(newQty)]).forEach(id => adjustSoldStock(sample[id], (newQty[id] || 0) - (oldQty[id] || 0)));
-  payment.items = items; payment.amount = items.reduce((s, i) => s + i.price * i.qty, 0);
-  payment.customer = document.querySelector('#invoiceCustomer').value.trim() || payment.customer; payment.method = document.querySelector('#invoiceMethodEdit').value;
+  const draftItems = invoiceDraft.items.map(i => ({ ...i, qty: Number(i.qty) || 0, price: Number(i.price) || 0 }));
+  const linesKey = list => JSON.stringify(list.map(i => [i.name, Number(i.qty) || 0, Number(i.price) || 0]));
+  // Parte de una cuenta dividida en partes iguales: sus líneas (abono / ajuste) cuadran con las demás partes; solo se corrige el pago o el cliente
+  if (payment.splitShare && linesKey(draftItems) !== linesKey(payment.items || [])) return showToast('Esta factura es una parte de una cuenta dividida: solo se puede corregir el medio de pago o el cliente. Para cambiar productos, elimínala y vuelve a cobrar.');
+  const items = payment.splitShare ? structuredClone(payment.items || []) : draftItems.filter(i => i.qty > 0);
+  if (!payment.splitShare) {
+    if (!items.length) return showToast('La factura necesita al menos un producto. Si todo fue un error, elimínala.');
+    if (items.some(i => !Number.isInteger(i.qty) || i.price < 0)) return showToast('Las cantidades deben ser enteras y los precios no pueden ser negativos.');
+  }
+  const newAmount = items.reduce((s, i) => s + i.price * i.qty, 0);
+  const draftTenders = invoiceDraft.tenders.map(t => ({ method: String(t.method || '').trim(), amount: Math.round(Number(t.amount) || 0) }));
+  if (draftTenders.length > 1) {
+    if (draftTenders.some(t => !t.method || t.amount <= 0)) return showToast('Cada medio del pago mixto necesita un monto mayor a $0.');
+    const sum = draftTenders.reduce((s, t) => s + t.amount, 0);
+    if (sum !== newAmount) return showToast(`El desglose del pago suma ${money.format(sum)} y la factura ${money.format(newAmount)}. Ajusta los montos.`);
+  }
+  const tenders = rebuildInvoiceTenders(invoiceTendersOf(payment), draftTenders, document.querySelector('#invoiceMethodEdit').value, newAmount);
+  const before = { customer: payment.customer, method: payment.method, amount: payment.amount, items: structuredClone(payment.items || []), payments: structuredClone(payment.payments || []) };
+  if (!payment.splitShare) {
+    const oldQty = {}, newQty = {}, sample = {};
+    before.items.forEach(i => { oldQty[i.productId] = (oldQty[i.productId] || 0) + i.qty; sample[i.productId] = i; });
+    items.forEach(i => { newQty[i.productId] = (newQty[i.productId] || 0) + i.qty; sample[i.productId] = i; });
+    new Set([...Object.keys(oldQty), ...Object.keys(newQty)]).forEach(id => adjustSoldStock(sample[id], (newQty[id] || 0) - (oldQty[id] || 0)));
+  }
+  payment.items = items; payment.amount = newAmount;
+  payment.customer = document.querySelector('#invoiceCustomer').value.trim() || payment.customer;
+  payment.payments = tenders; payment.method = tendersMethodLabel(tenders);
+  payment.sync_status = 'pending'; // la corrección también se sube a Supabase (monto, productos y desglose)
   payment.editedAt = Date.now(); payment.editedBy = actor().userName; payment.edits = [...(payment.edits || []), { at: payment.editedAt, by: payment.editedBy, reason, before }];
   logAudit('Factura editada', `${payment.invoiceNo} · ${money.format(before.amount)} → ${money.format(payment.amount)}${before.method !== payment.method ? ` · ${before.method} → ${payment.method}` : ''}`, { reason, data: { before } });
   saveState(); invoiceDraft = null; document.querySelector('#invoiceDialog').close(); renderAll(); showToast(`${payment.invoiceNo} corregida.`);
@@ -636,7 +688,7 @@ function reportDataset() {
     const waiter = p.waiterName || 'Sin asignar'; const w = data.byWaiter[waiter] || (data.byWaiter[waiter] = { sales: 0, count: 0 }); w.sales += p.amount; w.count++;
     const hour = new Date(paymentTimestamp(p)).getHours(); data.hours[hour] += p.amount; data.hourCount[hour]++;
     data.weekdays[parseISO(p.date).getDay()] += p.amount;
-    (p.items || []).forEach(item => {
+    (p.items || []).filter(item => !item.splitLine).forEach(item => {
       const sales = item.price * item.qty, cost = itemCost(item) * item.qty, category = itemCategory(item);
       const prod = data.byProduct[item.name] || (data.byProduct[item.name] = { qty: 0, sales: 0, cost: 0, category }); prod.qty += item.qty; prod.sales += sales; prod.cost += cost;
       const cat = data.byCategory[category] || (data.byCategory[category] = { qty: 0, sales: 0, cost: 0 }); cat.qty += item.qty; cat.sales += sales; cat.cost += cost;
@@ -853,12 +905,13 @@ function handleModuleClick(event) {
   if (d.printInvoice) return printPaymentReceipt(d.printInvoice, { reprint: true });
   if (d.editInvoice) return openInvoiceEdit(d.editInvoice);
   if (d.deleteInvoice) return openInvoiceDelete(d.deleteInvoice);
+  if (d.removeInvTender !== undefined && invoiceDraft) { invoiceDraft.tenders.splice(Number(d.removeInvTender), 1); if (invoiceDraft.tenders.length === 1) document.querySelector('#invoiceMethodEdit').value = invoiceDraft.tenders[0].method; return renderInvoiceTenders(); }
   if (d.removeInvLine !== undefined) { invoiceDraft.items.splice(Number(d.removeInvLine), 1); return renderInvoiceDraft(); }
   if (d.editSupplier) return openSupplierDialog(d.editSupplier);
   if (d.deleteSupplier) return deleteSupplier(d.deleteSupplier);
   const actions = {
     loginBackButton: () => { loginTarget = null; loginPin = ''; setLoginError(''); renderLogin(); }, userChip: openSessionDialog, logoutButton: showLogin, changePinButton: () => openPinDialog(false), savePinButton: savePin,
-    newUserButton: () => openUserDialog(), saveUserButton: saveUser, saveInvoiceButton: saveInvoiceEdit, invoiceAddButton: addInvoiceLine, confirmDeleteInvoiceButton: confirmDeleteInvoice,
+    newUserButton: () => openUserDialog(), saveUserButton: saveUser, saveInvoiceButton: saveInvoiceEdit, invoiceAddButton: addInvoiceLine, invoiceAddTender: () => { if (!invoiceDraft) return; invoiceDraft.tenders.push({ method: 'Nequi', amount: 0 }); renderInvoiceTenders(); }, confirmDeleteInvoiceButton: confirmDeleteInvoice,
     invoiceTodayButton: () => { invoiceFilter.date = ''; renderInvoices(); }, invoiceAllButton: () => { invoiceFilter.date = 'all'; renderInvoices(); },
     newSupplierButton: () => openSupplierDialog(), saveSupplierButton: saveSupplier, newWasteButton: openWasteDialog, saveWasteButton: saveWaste, newCountButton: openCountDialog, applyCountButton: applyCount,
     exportXlsxButton: exportReportXlsx, printReportButton: printReport,
@@ -877,13 +930,16 @@ function handleModuleInput(event) {
     const item = invoiceDraft.items[Number(t.dataset.invLine)]; if (!item) return; item[t.dataset.invField] = t.value === '' ? 0 : Number(t.value);
     const row = t.closest('.invoice-line'); if (row) row.querySelector('b').textContent = money.format((Number(item.price) || 0) * (Number(item.qty) || 0));
     const original = state.payments.find(p => p.id === invoiceDraft.id), total = draftTotal(), diff = total - (original?.amount || 0);
+    renderInvoiceTendersStatus();
     document.querySelector('#invoiceNewTotal').textContent = money.format(total); document.querySelector('#invoiceDiff').textContent = diff === 0 ? 'El total no cambia.' : `Total original ${money.format(original?.amount || 0)} · diferencia ${diff > 0 ? '+' : '−'}${money.format(Math.abs(diff))}`;
   }
+  if (t.dataset.invTender !== undefined && invoiceDraft) { const tender = invoiceDraft.tenders[Number(t.dataset.invTender)]; if (tender && t.dataset.invTenderField === 'amount') { tender.amount = t.value === '' ? 0 : Number(t.value); renderInvoiceTendersStatus(); } }
   if (t.id === 'wasteQty') updateWasteValue(); if (t.dataset.countItem !== undefined) updateCountTotals();
   if (t.id === 'invoiceSearch') { invoiceFilter.q = t.value; renderInvoices(); }
 }
 function handleModuleChange(event) {
   const t = event.target;
+  if (t.dataset.invTender !== undefined && t.dataset.invTenderField === 'method' && invoiceDraft) { const tender = invoiceDraft.tenders[Number(t.dataset.invTender)]; if (tender) tender.method = t.value; }
   if (t.id === 'wasteItem') updateWasteValue();
   if (t.id === 'invoiceDate') { invoiceFilter.date = t.value || 'all'; renderInvoices(); }
   if (t.id === 'invoiceMethod') { invoiceFilter.method = t.value; renderInvoices(); }

@@ -364,6 +364,42 @@ function orderTotal(order) {
   if (!order || !Array.isArray(order.items)) return 0;
   return order.items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
 }
+
+/* ---------- Cuenta dividida en partes iguales ----------
+   El avance vive en el pedido (order.equalSplit = { parts, baseTotal, paid: [{ part, amount, paymentId, paidAt }] }), que se
+   guarda en IndexedDB: sobrevive a recargas y a cerrar el diálogo. Los productos no se fraccionan: cada parte que no salda la
+   cuenta se factura como un abono (línea sin producto, sin efecto en inventario) y el cobro que deja el saldo en 0 lleva los
+   productos reales, en cantidades enteras, más una línea de ajuste por los abonos previos. Así cada factura cuadra con su
+   importe, el inventario se descuenta una sola vez y los reportes por producto no se duplican. */
+function equalSplitPaid(order) { return (order?.equalSplit?.paid || []).reduce((sum, p) => sum + (Number(p.amount) || 0), 0); }
+// Lo que la mesa aún debe (igual a orderTotal si la cuenta no se está dividiendo en partes iguales)
+function orderPending(order) { return Math.max(0, orderTotal(order) - equalSplitPaid(order)); }
+function equalSplitPlan(order, people = 2) {
+  const split = order.equalSplit, parts = split?.parts || people, total = orderTotal(order), pending = orderPending(order);
+  const paid = new Set((split?.paid || []).map(p => p.part)), unpaid = [];
+  for (let i = 1; i <= parts; i++) if (!paid.has(i)) unpaid.push(i);
+  // Cuota fija sobre el total original: Math.round(total / partes); la parte N absorbe el redondeo
+  const base = split ? split.baseTotal : total, quota = Math.round(base / parts), amounts = {};
+  unpaid.forEach(i => { amounts[i] = i === parts ? base - quota * (parts - 1) : quota; });
+  // Si la cuenta cambió después de empezar a dividir (se agregaron o quitaron productos), el saldo real se reparte entre las partes que faltan
+  if (unpaid.reduce((sum, i) => sum + amounts[i], 0) !== pending && unpaid.length) {
+    const share = Math.round(pending / unpaid.length);
+    unpaid.forEach((i, idx) => { amounts[i] = idx === unpaid.length - 1 ? pending - share * (unpaid.length - 1) : share; });
+  }
+  return { parts, total, base, quota, paid, unpaid, amounts, pending };
+}
+// Checkout de una o varias partes; si salda la cuenta, factura los productos reales con el ajuste de abonos previos
+function equalSplitCheckout(order, partList, people) {
+  const plan = equalSplitPlan(order, people), parts = partList.filter(i => plan.unpaid.includes(i)).sort((a, b) => a - b);
+  const amount = parts.reduce((sum, i) => sum + plan.amounts[i], 0), settles = amount >= plan.pending;
+  const label = parts.length === 1 ? `Parte ${parts[0]} de ${plan.parts}` : `Partes ${parts.join(', ')} de ${plan.parts}`;
+  const prev = equalSplitPaid(order);
+  const items = settles
+    ? [...structuredClone(order.items), ...(prev > 0 ? [{ name: 'Abonos anteriores (cuenta dividida)', qty: 1, price: -prev, splitLine: 'ajuste' }] : [])]
+    : [{ name: `${label} · ${order.tableName}`, qty: 1, price: amount, splitLine: 'abono' }];
+  const splitAmounts = Object.fromEntries(parts.map(i => [i, plan.amounts[i]]));
+  return { orderId: order.id, type: 'equal_fraction', items, total: amount, customerName: `${order.tableName} · ${label}`, splitParts: parts, splitAmounts, totalFractions: plan.parts, baseTotal: plan.base, settles, tableId: order.tableId };
+}
 function paymentsToday() { return state.payments.filter(p => p.date === today()); }
 function cleanupOrphanOrders() {
   if (!state || !Array.isArray(state.orders)) return;
@@ -464,7 +500,7 @@ function renderCustomOrders() {
   }
   listEl.innerHTML = orders.map(order => {
     const totalItems = order.items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
-    const totalMoney = orderTotal(order);
+    const totalMoney = orderPending(order);
     const tag = order.isCustom ? 'Personalizada' : (order.tableId === 'walkin' ? 'Barra' : 'Comanda');
     return `<div class="custom-order-card" data-order-card="${order.id}"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;"><div><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><strong>${escapeHtml(order.tableName || 'Cuenta')}</strong><span class="history-tag" style="font-size:9px;padding:2px 5px;">${tag}</span></div><span style="color:var(--muted);font-size:12px;margin-top:4px;display:block;">${totalItems} ${totalItems === 1 ? 'producto' : 'productos'} · ${elapsedLabel(order.createdAt)}</span></div><b style="color:var(--accent);font-size:15px;white-space:nowrap;">${money.format(totalMoney)}</b></div><div style="display:flex;gap:6px;margin-top:12px;"><button class="outline-button" style="flex:1;padding:6px 8px;font-size:12px;" data-open-custom-order="${order.id}">Ver / Editar</button><button class="primary-button" style="flex:1;padding:6px 8px;font-size:12px;" data-pay-custom-order="${order.id}">Cobrar</button><button class="remove-line" style="padding:4px 8px;" data-delete-custom-order="${order.id}" title="Anular cuenta">×</button></div></div>`;
   }).join('');
@@ -528,7 +564,7 @@ function renderStats() {
 }
 function renderZones() { const zones = ['Todas', ...new Set(state.tables.map(t => t.zone))]; document.querySelector('#zoneFilter').innerHTML = zones.map(z => `<button class="segment ${state.zone === z ? 'active':''}" data-zone="${z}">${z}</button>`).join(''); }
 function elapsedLabel(ts) { const mins = Math.max(0, Math.floor((Date.now() - (ts || Date.now())) / 60000)); if (mins < 1) return 'Recién abierta'; if (mins < 60) return `Abierta hace ${mins} min`; const h = Math.floor(mins / 60), m = mins % 60; return `Abierta hace ${h} h${m ? ` ${m} min` : ''}`; }
-function renderTables() { const tables = state.tables.filter(t => state.zone === 'Todas' || t.zone === state.zone); document.querySelector('#tableGrid').innerHTML = tables.map(table => { const order = activeOrderForTable(table.id); const long = order && Date.now() - (order.createdAt || Date.now()) >= 120 * 60000; return `<button class="table-card ${order ? 'occupied':''} ${table.type || ''}" data-table="${table.id}"><span class="table-top"><span class="table-name">${escapeHtml(table.name)}</span><span class="table-zone">${escapeHtml(table.zone)}</span></span>${order ? `<span class="table-bottom"><span class="table-amount">${money.format(orderTotal(order))}</span><span class="table-time ${long ? 'long' : ''}">${elapsedLabel(order.createdAt)}</span></span>` : '<span class="table-status empty">Disponible</span>'}</button>`; }).join(''); }
+function renderTables() { const tables = state.tables.filter(t => state.zone === 'Todas' || t.zone === state.zone); document.querySelector('#tableGrid').innerHTML = tables.map(table => { const order = activeOrderForTable(table.id); const long = order && Date.now() - (order.createdAt || Date.now()) >= 120 * 60000; return `<button class="table-card ${order ? 'occupied':''} ${table.type || ''}" data-table="${table.id}"><span class="table-top"><span class="table-name">${escapeHtml(table.name)}</span><span class="table-zone">${escapeHtml(table.zone)}</span></span>${order ? `<span class="table-bottom"><span class="table-amount">${money.format(orderPending(order))}</span><span class="table-time ${long ? 'long' : ''}">${elapsedLabel(order.createdAt)}</span></span>` : '<span class="table-status empty">Disponible</span>'}</button>`; }).join(''); }
 globalThis.renderShiftStatus = renderShiftStatus;
 globalThis.renderStats = renderStats;
 globalThis.renderTables = renderTables;
@@ -882,7 +918,7 @@ function renderOrderDialog() {
   }
 
   const orderTotalEl = document.querySelector('#orderTotal');
-  if (orderTotalEl) orderTotalEl.textContent = money.format(orderTotal(order));
+  if (orderTotalEl) orderTotalEl.textContent = money.format(orderPending(order));
 
   const deleteBtn = document.querySelector('#deleteOrderButton');
   if (deleteBtn) deleteBtn.style.visibility = order.items.length ? 'visible' : 'hidden';
@@ -938,7 +974,6 @@ let currentTenders = [];
 let splitBillData = {
   mode: 'equal',
   people: 2,
-  paidPartIndices: [],
   itemQuantities: {}
 };
 
@@ -950,6 +985,9 @@ function openPayment(customCheckout = null) {
 
   if (customCheckout) {
     currentCheckout = customCheckout;
+  } else if (order.equalSplit?.paid?.length) {
+    // Cuenta ya dividida en partes iguales: «Cobrar» salda las partes que faltan, no el consumo completo
+    currentCheckout = equalSplitCheckout(order, equalSplitPlan(order).unpaid);
   } else {
     currentCheckout = {
       orderId: order.id,
@@ -1198,6 +1236,7 @@ function confirmPayment() {
     return showToast(`Faltan ${money.format(currentCheckout.total - covered)} por cubrir.`);
   }
 
+  let splitEntries = null; // partes iguales cobradas en este pago (se enlazan a la factura más abajo)
   deductInventory({ items: currentCheckout.items });
 
   if (currentCheckout.type === 'full') {
@@ -1217,21 +1256,15 @@ function confirmPayment() {
       order.paidAt = Date.now();
     }
   } else if (currentCheckout.type === 'equal_fraction') {
-    if (currentCheckout.isLastFraction || order.items.length === 0) {
+    // Las partes cobradas quedan en el pedido; la mesa se cierra solo cuando el saldo pendiente llega a 0
+    const split = order.equalSplit || (order.equalSplit = { parts: currentCheckout.totalFractions, baseTotal: currentCheckout.baseTotal, paid: [] });
+    splitEntries = currentCheckout.splitParts.map(part => ({ part, amount: currentCheckout.splitAmounts[part], paidAt: Date.now() }));
+    split.paid.push(...splitEntries);
+    order.paidAmount = Number(order.paidAmount || 0) + currentCheckout.total;
+    if (orderPending(order) === 0) {
       order.items = [];
       order.status = 'paid';
       order.paidAt = Date.now();
-      order.paidAmount = Number(order.paidAmount || 0) + currentCheckout.total;
-    } else {
-      currentCheckout.items.forEach(fracItem => {
-        const oi = order.items.find(i => i.productId === fracItem.productId);
-        if (oi) oi.qty = Math.max(0, Number((oi.qty - fracItem.qty).toFixed(2)));
-      });
-      order.items = order.items.filter(i => i.qty > 0);
-      order.paidAmount = Number(order.paidAmount || 0) + currentCheckout.total;
-    }
-    if (splitBillData.paidPartIndices && currentCheckout.fractionIndex) {
-      splitBillData.paidPartIndices.push(currentCheckout.fractionIndex);
     }
   }
 
@@ -1263,6 +1296,10 @@ function confirmPayment() {
     sync_status: 'pending'
   };
 
+  if (splitEntries) {
+    splitEntries.forEach(entry => { entry.paymentId = newPayment.id; });
+    newPayment.splitShare = { orderId: order.id, parts: currentCheckout.splitParts, of: currentCheckout.totalFractions, settles: order.status === 'paid' };
+  }
   state.payments.push(newPayment);
   saveState();
   if (globalThis.NexoSync?.deleteActiveOrder) {
@@ -1296,7 +1333,7 @@ function confirmPayment() {
       renderSplitBill();
     }
     renderOrderDialog();
-    showToast(`Fracción cobrada · ${money.format(currentCheckout.total)}. Quedan ${money.format(orderTotal(order))} en la mesa.`, { action: printAction });
+    showToast(`Fracción cobrada · ${money.format(currentCheckout.total)}. Quedan ${money.format(orderPending(order))} en la mesa.`, { action: printAction });
   }
 
   currentCheckout = null;
@@ -1311,16 +1348,24 @@ function openSplitBill() {
 
   splitBillData.orderId = order.id;
   splitBillData.itemQuantities = {};
-  splitBillData.paidPartIndices = [];
+  // Una división en partes iguales ya empezada se retoma tal cual (número de personas y partes cobradas)
+  if (order.equalSplit?.paid?.length) { splitBillData.people = order.equalSplit.parts; splitBillData.mode = 'equal'; }
 
   const dialog = document.querySelector('#splitBillDialog');
   if (dialog) {
     dialog.showModal();
-    renderSplitBill();
+    setSplitBillMode(splitBillData.mode || 'equal');
   }
 }
 
+function splitInProgress(order) { return Boolean(order?.equalSplit?.paid?.length); }
+
 function setSplitBillMode(mode) {
+  const order = getOrder(state.currentOrderId || splitBillData.orderId);
+  if (mode === 'items' && splitInProgress(order)) {
+    showToast('Esta cuenta ya se está cobrando en partes iguales. Termina de cobrar las partes que faltan.');
+    mode = 'equal';
+  }
   splitBillData.mode = mode;
   const isEq = mode === 'equal';
   document.querySelector('#splitModeEqualBtn')?.classList.toggle('active', isEq);
@@ -1330,73 +1375,66 @@ function setSplitBillMode(mode) {
   renderSplitBill();
 }
 
-function changeSplitPeople(delta) {
-  let count = (splitBillData.people || 2) + delta;
-  if (count < 2) count = 2;
-  if (count > 20) count = 20;
-  splitBillData.people = count;
-  splitBillData.paidPartIndices = [];
-  renderSplitBill();
-}
-
-function setSplitPeopleExact(count) {
+// Con partes ya cobradas no se cambia el número de personas: alteraría las cuotas ya pagadas
+function setSplitPeople(count) {
+  const order = getOrder(state.currentOrderId || splitBillData.orderId);
+  if (splitInProgress(order)) return showToast(`Ya se cobraron partes de esta cuenta; se mantiene dividida entre ${order.equalSplit.parts} personas.`);
   splitBillData.people = Math.max(2, Math.min(20, count));
-  splitBillData.paidPartIndices = [];
   renderSplitBill();
 }
+function changeSplitPeople(delta) { setSplitPeople((splitBillData.people || 2) + delta); }
+function setSplitPeopleExact(count) { setSplitPeople(count); }
 
 function renderSplitBill() {
   const order = getOrder(state.currentOrderId || splitBillData.orderId);
   if (!order) return;
-  const total = orderTotal(order);
 
   const titleEl = document.querySelector('#splitBillTitle');
-  if (titleEl) titleEl.textContent = `Dividir cuenta · ${order.tableName} (${money.format(total)})`;
+  if (titleEl) titleEl.textContent = `Dividir cuenta · ${order.tableName} (${money.format(orderPending(order))})`;
 
   if (splitBillData.mode === 'equal') {
-    renderSplitEqual(order, total);
+    renderSplitEqual(order);
   } else {
     renderSplitItems(order);
   }
 }
 
-function renderSplitEqual(order, total) {
-  const n = splitBillData.people || 2;
+function renderSplitEqual(order) {
+  const plan = equalSplitPlan(order, splitBillData.people || 2), n = plan.parts, locked = splitInProgress(order);
+  splitBillData.people = n;
   const peopleCountInput = document.querySelector('#splitPeopleCount');
   if (peopleCountInput) peopleCountInput.value = n;
 
   document.querySelectorAll('.people-preset-btn').forEach(b => {
     b.classList.toggle('active', Number(b.dataset.people) === n);
+    b.disabled = locked;
   });
+  ['#splitPeopleDec', '#splitPeopleInc'].forEach(sel => { const btn = document.querySelector(sel); if (btn) btn.disabled = locked; });
 
   const totalOrderEl = document.querySelector('#splitEqualTotalOrder');
-  if (totalOrderEl) totalOrderEl.textContent = money.format(total);
+  if (totalOrderEl) totalOrderEl.textContent = locked ? `${money.format(plan.base)} · pendiente ${money.format(plan.pending)}` : money.format(plan.total);
 
-  const perPerson = Math.round(total / n);
   const perPersonEl = document.querySelector('#splitEqualPerPerson');
-  if (perPersonEl) perPersonEl.textContent = `${money.format(perPerson)} c/u`;
+  if (perPersonEl) perPersonEl.textContent = `${money.format(plan.quota)} c/u`;
 
   const listEl = document.querySelector('#splitFractionsList');
   if (!listEl) return;
 
-  const paidSet = new Set(splitBillData.paidPartIndices || []);
+  const paidByPart = new Map((order.equalSplit?.paid || []).map(p => [p.part, p.amount]));
   let html = '';
-
   for (let i = 1; i <= n; i++) {
-    const isPaid = paidSet.has(i);
-    const isLast = i === n;
-    const fractionAmount = isLast ? (total - (perPerson * (n - 1))) : perPerson;
-
+    const isPaid = paidByPart.has(i);
+    const amount = isPaid ? paidByPart.get(i) : plan.amounts[i];
     html += `
       <div class="fraction-card ${isPaid ? 'paid' : ''}">
         <div class="fraction-meta">
           <span class="fraction-badge">Persona ${i} de ${n}</span>
-          <strong class="fraction-amount">${money.format(fractionAmount)}</strong>
+          <strong class="fraction-amount">${money.format(amount)}</strong>
         </div>
         <div class="fraction-action">
           ${isPaid
             ? `<span class="paid-status-badge">✓ Cobrado</span>`
-            : `<button type="button" class="primary-button charge-fraction-btn" data-charge-part="${i}" data-amount="${fractionAmount}">Cobrar Fracción</button>`
+            : `<button type="button" class="primary-button charge-fraction-btn" data-charge-part="${i}" data-amount="${amount}">Cobrar Fracción</button>`
           }
         </div>
       </div>
@@ -1405,34 +1443,13 @@ function renderSplitEqual(order, total) {
   listEl.innerHTML = html;
 }
 
-function chargeEqualPart(partIndex, fractionAmount) {
+// El monto se recalcula desde el pedido (no se confía en el data-amount del botón)
+function chargeEqualPart(partIndex) {
   const order = getOrder(state.currentOrderId || splitBillData.orderId);
-  if (!order || !order.items.length) return showToast('No hay saldo pendiente en esta mesa.');
-
-  const n = splitBillData.people || 2;
-  const isLast = (splitBillData.paidPartIndices.length + 1 >= n) || partIndex === n;
-
-  const remainingFractions = Math.max(1, n - splitBillData.paidPartIndices.length);
-  const fractionFactor = 1 / remainingFractions;
-
-  const itemsForFraction = order.items.map(item => {
-    const qty = isLast ? item.qty : Math.max(0.01, Number((item.qty * fractionFactor).toFixed(2)));
-    return {
-      ...structuredClone(item),
-      qty
-    };
-  });
-
-  openPayment({
-    orderId: order.id,
-    type: 'equal_fraction',
-    items: itemsForFraction,
-    total: fractionAmount,
-    customerName: `${order.tableName} · Fracción ${partIndex}/${n}`,
-    fractionIndex: partIndex,
-    totalFractions: n,
-    isLastFraction: isLast
-  });
+  if (!order || !order.items.length || orderPending(order) <= 0) return showToast('No hay saldo pendiente en esta mesa.');
+  const plan = equalSplitPlan(order, splitBillData.people || 2);
+  if (!plan.unpaid.includes(partIndex)) return showToast('Esa parte ya fue cobrada.');
+  openPayment(equalSplitCheckout(order, [partIndex], splitBillData.people || 2));
 }
 
 function renderSplitItems(order) {
@@ -1503,6 +1520,7 @@ function clearSplitItems() {
 function chargeSelectedSplitItems() {
   const order = getOrder(state.currentOrderId || splitBillData.orderId);
   if (!order) return;
+  if (splitInProgress(order)) return showToast('Esta cuenta ya se está cobrando en partes iguales. Termina de cobrar las partes que faltan.');
 
   const itemsToCharge = order.items
     .filter(i => (splitBillData.itemQuantities[i.productId] || 0) > 0)
@@ -1936,7 +1954,7 @@ document.addEventListener('click', event => {
   if (target.id === 'splitPeopleDec') changeSplitPeople(-1);
   if (target.id === 'splitPeopleInc') changeSplitPeople(1);
   if (target.dataset.people) setSplitPeopleExact(Number(target.dataset.people));
-  if (target.dataset.chargePart) chargeEqualPart(Number(target.dataset.chargePart), Number(target.dataset.amount));
+  if (target.dataset.chargePart) chargeEqualPart(Number(target.dataset.chargePart));
   if (target.dataset.splitItemDec) changeSplitItemQty(target.dataset.splitItemDec, -1);
   if (target.dataset.splitItemInc) changeSplitItemQty(target.dataset.splitItemInc, 1);
   if (target.id === 'splitSelectAllBtn') selectAllSplitItems();
@@ -2371,7 +2389,7 @@ document.addEventListener('click',e=>{const b=e.target.closest('[data-report-ran
   function updateMobileOrderBar() {
     const order = getOrder(state.currentOrderId);
     const count = order ? order.items.reduce(function(s, i) { return s + (i.qty || 1); }, 0) : 0;
-    const total = order ? orderTotal(order) : 0;
+    const total = order ? orderPending(order) : 0;
 
     const countEl = document.querySelector('#mobileOrderCount');
     const barCount = document.querySelector('#mobileBarCount');

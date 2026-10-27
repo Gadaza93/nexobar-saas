@@ -488,6 +488,7 @@
       <div class="dialog-header"><div><p class="eyebrow" id="invoiceDialogNo">FACTURA</p><h2>Corregir factura</h2></div><button class="icon-button" data-close="invoiceDialog" aria-label="Cerrar">×</button></div>
       <p id="invoiceWarning" class="invoice-warning" hidden></p>
       <div class="two-fields"><div><label class="field-label" for="invoiceCustomer">Mesa o cliente</label><input id="invoiceCustomer" type="text" /></div><div><label class="field-label" for="invoiceMethodEdit">Medio de pago</label><select id="invoiceMethodEdit"></select></div></div>
+      <div id="invoiceTendersBox" class="invoice-tenders-box" hidden><p class="field-label">Desglose del pago mixto (debe sumar el nuevo total)</p><div id="invoiceTenders" class="invoice-tenders"></div><button id="invoiceAddTender" class="outline-button" type="button">+ Agregar medio</button><p id="invoiceTendersStatus" class="muted"></p></div>
       <p class="field-label">Productos · cantidad · precio unitario</p><div id="invoiceLines" class="invoice-lines"></div>
       <div class="invoice-add"><select id="invoiceAddProduct" aria-label="Producto a agregar"></select><button id="invoiceAddButton" class="outline-button">+ Agregar</button></div>
       <div class="dialog-total"><span>Nuevo total</span><strong id="invoiceNewTotal">$0</strong></div>

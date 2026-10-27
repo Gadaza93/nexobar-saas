@@ -1457,3 +1457,13 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 .print-printer-row select { flex: 1; min-width: 0; }
 .print-printer-row .outline-button { min-height: 40px; padding: 0 12px; }
 .print-settings-card .check-row { margin-bottom: 12px; }
+
+/* ---------- Corrección de facturas: desglose de pago mixto ---------- */
+.invoice-tenders-box { margin: 4px 0 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); }
+.invoice-tenders-box[hidden] { display: none; }
+.invoice-tenders { display: grid; gap: 8px; margin-bottom: 8px; }
+.invoice-tender-row { display: grid; grid-template-columns: minmax(0, 1fr) 130px 30px; gap: 8px; align-items: center; }
+.invoice-tender-row select, .invoice-tender-row input { margin-bottom: 0; min-height: 38px; }
+.invoice-tenders-box #invoiceTendersStatus { margin: 8px 0 0; font-size: 12px; }
+/* División en partes iguales con partes ya cobradas: el número de personas queda fijo */
+.people-preset-btn:disabled, .stepper-btn:disabled, #invoiceMethodEdit:disabled { opacity: .45; cursor: not-allowed; }
