@@ -530,7 +530,8 @@ async function deleteProduct(productId) {
   const isOff = typeof navigator !== "undefined" && navigator.onLine === false;
   if (sb && !isOff && syncState.online !== false) {
     try {
-      const { error: delErr } = await sb.from("productos").delete().eq("id", cleanId);
+      // Defensa en profundidad: además del RLS, el borrado se limita al negocio de esta caja
+      const { error: delErr } = await sb.from("productos").delete().eq("id", cleanId).eq("business_id", getBusinessId());
       if (!delErr) {
         deletedProductIds = deletedProductIds.filter(id => id !== cleanId);
         saveDeletedIds();
@@ -568,7 +569,7 @@ async function deleteSale(saleId) {
   const isOff = typeof navigator !== "undefined" && navigator.onLine === false;
   if (sb && !isOff && syncState.online !== false) {
     try {
-      const { error: delErr } = await sb.from("ventas").delete().eq("id", cleanId);
+      const { error: delErr } = await sb.from("ventas").delete().eq("id", cleanId).eq("business_id", getBusinessId());
       if (!delErr) {
         deletedSaleIds = deletedSaleIds.filter(id => id !== cleanId);
         saveDeletedIds();
@@ -604,7 +605,7 @@ async function syncProductos(options = {}) {
     if (deletedProductIds.length > 0) {
       try {
         const idsToDelete = [...deletedProductIds];
-        const { error: delErr } = await sb.from("productos").delete().in("id", idsToDelete);
+        const { error: delErr } = await sb.from("productos").delete().in("id", idsToDelete).eq("business_id", bId);
         if (!delErr) {
           deletedProductIds = deletedProductIds.filter(id => !idsToDelete.includes(id));
           saveDeletedIds();
@@ -1131,7 +1132,7 @@ async function syncSales(options = {}) {
     if (deletedSaleIds.length > 0) {
       try {
         const idsToDelete = [...deletedSaleIds];
-        const { error: delErr } = await sb.from("ventas").delete().in("id", idsToDelete);
+        const { error: delErr } = await sb.from("ventas").delete().in("id", idsToDelete).eq("business_id", bId);
         if (!delErr) {
           deletedSaleIds = deletedSaleIds.filter(id => !idsToDelete.includes(id));
           saveDeletedIds();

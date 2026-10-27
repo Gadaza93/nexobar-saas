@@ -15,6 +15,7 @@ const vm = require('vm');
 const ROOT = path.join(__dirname, '..');
 const read = file => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r\n/g, '\n');
 const results = [];
+const asyncChecks = []; // comprobaciones asíncronas: se ejecutan antes de imprimir el reporte
 function check(area, severity, vector, vulnerable, detail = '') {
   results.push({ area, severity, vector, vulnerable: Boolean(vulnerable), detail });
 }
@@ -115,7 +116,25 @@ const cspIssues = [['index.html', indexHtml], ['admin.html', adminHtml]].flatMap
 });
 check('Electron/Web', 'Media', 'index.html/admin.html: Content-Security-Policy estricta (scripts solo propios, sin inline/eval, object-src none) antes de cualquier script',
   cspIssues.length > 0, cspIssues.join(' · '));
-check('Electron', 'Baja', 'package.json: sin @electron/fuses (RunAsNode / NODE_OPTIONS siguen habilitados en NexoBar.exe)', !/fuses/i.test(read('package.json')));
+// Fuses: el gancho afterPack debe apagarlos y, si hay un ejecutable compilado, se leen los grabados en NexoBar.exe
+const pkgBuild = JSON.parse(read('package.json')).build || {};
+const fuseHookPath = pkgBuild.afterPack ? path.join(ROOT, pkgBuild.afterPack) : '';
+const fuseHook = fuseHookPath && fs.existsSync(fuseHookPath) ? fs.readFileSync(fuseHookPath, 'utf8') : '';
+const hookOk = /FuseV1Options\.RunAsNode\]: false/.test(fuseHook) && /FuseV1Options\.EnableNodeOptionsEnvironmentVariable\]: false/.test(fuseHook);
+asyncChecks.push(async () => {
+  const exe = path.join(ROOT, 'dist', 'win-unpacked', 'NexoBar.exe');
+  let wireDetail = 'sin ejecutable compilado: solo se revisó la configuración', wireOk = true;
+  if (fs.existsSync(exe)) {
+    const { getCurrentFuseWire, FuseV1Options, FuseState } = require(require.resolve('@electron/fuses', { paths: [ROOT] }));
+    const wire = await getCurrentFuseWire(exe), state = o => (wire[o] === FuseState.ENABLE ? 'on' : wire[o] === FuseState.DISABLE ? 'off' : String(wire[o]));
+    const want = { RunAsNode: 'off', EnableNodeOptionsEnvironmentVariable: 'off', EnableNodeCliInspectArguments: 'off', OnlyLoadAppFromAsar: 'on', EnableEmbeddedAsarIntegrityValidation: 'on' };
+    const got = Object.fromEntries(Object.keys(want).map(k => [k, state(FuseV1Options[k])]));
+    wireOk = Object.keys(want).every(k => got[k] === want[k]);
+    wireDetail = `NexoBar.exe: ${Object.entries(got).map(([k, v]) => `${k}=${v}`).join(', ')}`;
+  }
+  check('Electron', 'Baja', 'Fuses de Electron: RunAsNode, NODE_OPTIONS e --inspect desactivados; solo app.asar con integridad (configuración y NexoBar.exe compilado)',
+    !hookOk || !wireOk, wireDetail);
+});
 
 // Desinfección del HTML del ticket (print.js)
 const print = require(path.join(ROOT, 'print.js'));
@@ -237,7 +256,6 @@ const lost = races.filter(([, bad]) => bad);
 check('Finanzas/Sync', 'Alta', 'mergeRemoteOrders respeta cambios locales pendientes de subir (sync_status: pending) ante una copia remota desactualizada',
   lost.length > 0, lost.map(([name]) => name).join(' · '));
 // Arranque (bootstrap → syncOnStartup): se registra el orden real de subida y descarga en tres escenarios
-const asyncChecks = [];
 asyncChecks.push(async () => {
   const appSrc = read('app.js');
   const usesStartup = /await syncOnStartup\(\)/.test(appSrc.slice(appSrc.indexOf('async function bootstrap()')));
