@@ -222,7 +222,7 @@
     </div>
 
     <dialog id="orderDialog" class="wide-dialog">
-      <div class="dialog-header"><div><p class="eyebrow" id="orderZone">BARRA</p><h2 id="orderTitle">Nuevo pedido</h2></div><button class="icon-button" data-close="orderDialog" aria-label="Cerrar">×</button></div>
+      <div class="dialog-header"><div><p class="eyebrow" id="orderZone">BARRA</p><h2 id="orderTitle">Nuevo pedido</h2></div><div class="order-header-actions"><button id="moveOrderButton" class="outline-button order-move-btn" type="button" disabled>⇄ Mover / Unir</button><button class="icon-button" data-close="orderDialog" aria-label="Cerrar">×</button></div></div>
       <!-- Pestañas solo visibles en móvil -->
       <div class="order-tabs-mobile" id="orderTabsMobile">
         <button type="button" class="order-tab-btn active" id="orderTabProducts" data-tab="products"><span>&#127874;</span> Catálogo</button>
@@ -686,6 +686,15 @@
           <p id="suspendedNote" class="suspended-note" role="status"></p>
         </div>
       </div>
+    </dialog>
+
+    <!-- Mover / unir mesas: libres = traslado directo · ocupadas = unir cuentas -->
+    <dialog id="moveOrderDialog" class="small-dialog move-order-dialog" aria-labelledby="moveOrderHeading">
+      <div class="dialog-header"><div><p class="eyebrow">Mover / unir cuenta</p><h2 id="moveOrderHeading"><span id="moveOrderTitle">Mesa</span></h2></div><button class="icon-button" data-close="moveOrderDialog" aria-label="Cerrar">×</button></div>
+      <h3 class="move-section-title"><span class="move-dot free"></span>Mesas libres <small>· traslado directo</small></h3>
+      <div id="moveOrderFree" class="move-table-grid"></div>
+      <h3 class="move-section-title"><span class="move-dot occupied"></span>Mesas ocupadas <small>· unir cuentas</small></h3>
+      <div id="moveOrderOccupied" class="move-table-grid"></div>
     </dialog>
 
     <div id="toast" class="toast" role="status" popover="manual"></div>

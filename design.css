@@ -1467,3 +1467,22 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 .invoice-tenders-box #invoiceTendersStatus { margin: 8px 0 0; font-size: 12px; }
 /* División en partes iguales con partes ya cobradas: el número de personas queda fijo */
 .people-preset-btn:disabled, .stepper-btn:disabled, #invoiceMethodEdit:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ---------- Mover / unir mesas ---------- */
+.order-header-actions { display: flex; align-items: center; gap: 10px; }
+.order-move-btn { min-height: 36px; padding: 0 14px; font-size: 13px; white-space: nowrap; }
+.order-move-btn:disabled { opacity: .45; cursor: not-allowed; }
+.move-order-dialog { width: min(560px, 94vw); }
+.move-section-title { display: flex; align-items: center; gap: 8px; margin: 16px 0 10px; font-size: 14px; }
+.move-section-title small { color: var(--muted); font-weight: 500; }
+.move-dot { width: 9px; height: 9px; border-radius: 50%; }
+.move-dot.free { background: var(--success); }
+.move-dot.occupied { background: var(--warn); }
+.move-table-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.move-table-grid .muted { grid-column: 1 / -1; margin: 0; font-size: 13px; }
+.move-table-btn { display: grid; gap: 4px; padding: 12px; text-align: left; border-radius: var(--r-sm); border: 1px solid var(--success); background: var(--success-soft); color: var(--text); cursor: pointer; transition: transform .08s, border-color .15s; }
+.move-table-btn small { color: var(--muted); font-size: 11px; }
+.move-table-btn.occupied { border-color: var(--warn); background: var(--warn-soft); }
+.move-table-btn.is-blocked { border-style: dashed; border-color: var(--danger); background: var(--danger-soft); }
+.move-table-btn:hover { transform: translateY(-1px); }
+@media (max-width: 768px) { .order-move-btn { padding: 0 10px; font-size: 12px; } }

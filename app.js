@@ -752,6 +752,93 @@ function openCustomOrder(orderId) {
 }
 globalThis.openCustomOrder = openCustomOrder;
 
+/* ---------- Mover / unir mesas ----------
+   Traslado (mesa destino libre): el mismo pedido cambia de mesa; conserva id, productos y un cobro en partes en curso.
+   Unión (mesa destino ocupada): los productos pasan al pedido de la mesa destino y el pedido de origen se elimina.
+   El estado de cada mesa se deriva de activeOrderForTable, así que el origen queda libre sin más pasos. */
+function isTableOrder(order) { return Boolean(order) && !order.isCustom && order.tableId !== 'walkin' && (state.tables || []).some(t => t.id === order.tableId); }
+function canMoveOrder(order) { return isTableOrder(order) && isOrderOpen(order); }
+function moveTargets(order) {
+  const others = (state.tables || []).filter(t => t.id !== order.tableId);
+  return {
+    free: others.filter(t => !activeOrderForTable(t.id)),
+    occupied: others.filter(t => activeOrderForTable(t.id)).map(t => ({ table: t, order: activeOrderForTable(t.id) }))
+  };
+}
+function transferOrder(order, table) {
+  const fromName = order.tableName;
+  // Un pedido vacío que se haya abierto en la mesa destino (sin productos) se descarta para no dejar dos pedidos en ella
+  state.orders = state.orders.filter(o => o.id === order.id || o.tableId !== table.id || isOrderOpen(o) || String(o.status || '').toLowerCase() !== 'open');
+  order.tableId = table.id; order.tableName = table.name;
+  order.sync_status = 'pending'; order.updatedAt = Date.now();
+  logAudit('Mesa trasladada', `${fromName} → ${table.name} · ${money.format(orderPending(order))}`);
+  return { ok: true, mode: 'move', order };
+}
+function mergeOrderInto(source, target) {
+  const added = orderTotal(source);
+  // Mismo producto y mismo precio: se suman cantidades. Si el precio cambió entre una y otra cuenta, línea aparte (no altera importes)
+  source.items.forEach(item => {
+    if (!((Number(item.qty) || 0) > 0)) return;
+    const same = target.items.find(i => i.productId === item.productId && Number(i.price) === Number(item.price));
+    if (same) same.qty = Number(same.qty) + Number(item.qty);
+    else target.items.push(structuredClone(item));
+  });
+  if (source.note) target.note = [target.note, `${source.tableName}: ${source.note}`].filter(Boolean).join(' · ');
+  target.paidAmount = (Number(target.paidAmount) || 0) + (Number(source.paidAmount) || 0); // cobros por productos ya hechos en cualquiera de las dos
+  target.createdAt = Math.min(target.createdAt || Date.now(), source.createdAt || Date.now());
+  target.mergedFrom = [...(target.mergedFrom || []), { orderId: source.id, tableName: source.tableName, amount: added, at: Date.now() }];
+  target.sync_status = 'pending'; target.updatedAt = Date.now();
+  state.orders = state.orders.filter(o => o.id !== source.id);
+  logAudit('Cuentas unidas', `${source.tableName} → ${target.tableName} · +${money.format(added)} · nuevo total ${money.format(orderTotal(target))}`, { data: { source: structuredClone(source) } });
+  return { ok: true, mode: 'merge', order: target, removedId: source.id };
+}
+// Punto único: decide traslado o unión, guarda en IndexedDB y marca los pedidos para Supabase
+function moveOrderToTable(orderId, tableId, { confirmMerge = message => window.confirm(message) } = {}) {
+  const order = getOrder(orderId), table = (state.tables || []).find(t => t.id === tableId);
+  if (!canMoveOrder(order)) return { ok: false, error: 'Solo se pueden mover pedidos de mesa que tengan productos.' };
+  if (!table || table.id === order.tableId) return { ok: false, error: 'Elige una mesa distinta a la actual.' };
+  const targetOrder = activeOrderForTable(table.id);
+  let result;
+  if (!targetOrder) result = transferOrder(order, table);
+  else {
+    const halfSplit = [order, targetOrder].find(o => splitInProgress(o));
+    if (halfSplit) return { ok: false, blocked: true, error: `No se pueden unir: ${halfSplit.tableName} tiene un cobro en partes iguales a medias. Primero cobra las partes que faltan (o la cuenta completa) y luego une las mesas.` };
+    if (!confirmMerge(`¿Deseas unir la cuenta de ${order.tableName} con ${table.name}? Se combinarán los consumos en una sola cuenta.`)) return { ok: false, cancelled: true };
+    result = mergeOrderInto(order, targetOrder);
+  }
+  state.currentOrderId = result.order.id;
+  saveState();
+  if (result.removedId && globalThis.NexoSync?.deleteActiveOrder) globalThis.NexoSync.deleteActiveOrder(result.removedId).catch(() => {});
+  if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
+  return result;
+}
+function openMoveOrderDialog() {
+  const order = getOrder(state.currentOrderId);
+  if (!canMoveOrder(order)) return showToast('Solo se pueden mover pedidos de mesa que tengan productos.');
+  const { free, occupied } = moveTargets(order), locked = splitInProgress(order);
+  document.querySelector('#moveOrderTitle').textContent = `${order.tableName} · ${money.format(orderPending(order))}`;
+  document.querySelector('#moveOrderFree').innerHTML = free.length
+    ? free.map(t => `<button type="button" class="move-table-btn" data-move-to="${escapeHtml(t.id)}"><strong>${escapeHtml(t.name)}</strong><small>${escapeHtml(t.zone || '')} · Libre</small></button>`).join('')
+    : '<p class="muted">No hay mesas libres.</p>';
+  document.querySelector('#moveOrderOccupied').innerHTML = occupied.length
+    ? occupied.map(({ table, order: o }) => {
+      const blocked = locked || splitInProgress(o);
+      return `<button type="button" class="move-table-btn occupied${blocked ? ' is-blocked' : ''}" data-move-to="${escapeHtml(table.id)}"><strong>${escapeHtml(table.name)}</strong><small>${money.format(orderPending(o))}${blocked ? ' · cobro en partes a medias' : ' · unir cuentas'}</small></button>`;
+    }).join('')
+    : '<p class="muted">No hay otras mesas ocupadas.</p>';
+  document.querySelector('#moveOrderDialog').showModal();
+}
+function chooseMoveTarget(tableId) {
+  const result = moveOrderToTable(state.currentOrderId, tableId);
+  if (!result.ok) { if (!result.cancelled) showToast(result.error); return; }
+  document.querySelector('#moveOrderDialog')?.close();
+  const table = state.tables.find(t => t.id === result.order.tableId);
+  const zoneEl = document.querySelector('#orderZone'); if (zoneEl) zoneEl.textContent = (table?.zone || 'SALÓN').toUpperCase();
+  const titleEl = document.querySelector('#orderTitle'); if (titleEl) titleEl.textContent = result.order.tableName;
+  renderOrderDialog(); renderAll();
+  showToast(result.mode === 'move' ? `Cuenta trasladada a ${result.order.tableName}.` : `Cuentas unidas en ${result.order.tableName} · Total ${money.format(orderPending(result.order))}.`);
+}
+
 function openCustomOrderDialog() { if(!requireOpenShift())return;document.querySelector('#customOrderName').value='';document.querySelector('#customOrderDialog').showModal(); }
 function createCustomOrder() {
   if (isDemoMode() && isDemoLimitReached()) {
@@ -798,6 +885,10 @@ globalThis.productVisual = productVisual;
 function renderOrderDialog() {
   const order = getOrder(state.currentOrderId);
   if (!order) return;
+
+  // «Mover / Unir»: solo pedidos de mesa (no barra ni cuentas personalizadas) con productos
+  const moveBtn = document.querySelector('#moveOrderButton');
+  if (moveBtn) { const movable = canMoveOrder(order); moveBtn.disabled = !movable; moveBtn.title = movable ? 'Trasladar a una mesa libre o unir con una ocupada' : (isTableOrder(order) ? 'Agrega productos para poder mover la cuenta' : 'Solo disponible para pedidos de mesa'); }
 
   const catTabsEl = document.querySelector('#categoryTabs');
   const prodGridEl = document.querySelector('#productGrid');
@@ -1943,6 +2034,8 @@ document.addEventListener('click', event => {
   if (target.dataset.openCustomOrder) openCustomOrder(target.dataset.openCustomOrder);
   if (target.dataset.category) { state.activeCategory = target.dataset.category; renderOrderDialog(); }
   if (target.dataset.product) addProduct(target.dataset.product);
+  if (target.id === 'moveOrderButton') openMoveOrderDialog();
+  if (target.dataset.moveTo) chooseMoveTarget(target.dataset.moveTo);
   if (target.dataset.itemChange) changeItem(target.dataset.itemChange, target.dataset.delta);
   if (target.dataset.method) { state.paymentMethod = target.dataset.method; renderPaymentOptions(); updateTenderChange(); }
   if (target.dataset.payMethod) { activePaymentMethod = target.dataset.payMethod; state.paymentMethod = activePaymentMethod; refreshPaymentUI(); }
