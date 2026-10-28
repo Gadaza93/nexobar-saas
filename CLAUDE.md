@@ -38,7 +38,7 @@ El esquema no está en el repositorio: estos pasos se aplican a mano en el proye
    create index if not exists turnos_caja_negocio_idx     on public.turnos_caja (business_id, estado, created_at desc);
    ```
 2. **Tiempo real**: la publicación `supabase_realtime` ya incluye `negocios`, `pedidos_activos`, `productos`, `turnos_caja` y `ventas` (28-10-2026). Si se agrega otra tabla que la app escuche en `setupRealtime`, hay que agregarla también aquí.
-3. **Pedidos en tabla propia** — solo cuando **todas** las cajas tengan la versión con `usaTablaPedidos` (las de Windows necesitan instalador nuevo); activa el modo en todas a la vez (la tabla ya está en el tiempo real; falta la columna):
+3. **Pedidos en tabla propia** — **aplicado el 28-10-2026** (columna `meta` + tabla en el tiempo real). Las versiones anteriores siguen siendo compatibles: leen las columnas normales de `pedidos_activos` y las nuevas leen sus filas sin `meta`. Para un proyecto nuevo de Supabase:
    ```sql
    alter table public.pedidos_activos add column if not exists meta jsonb;
    do $ begin
