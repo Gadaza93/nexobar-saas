@@ -6,7 +6,7 @@ POS para bares (antes "Brasa POS"), en español de Colombia (`es-CO`, pesos sin 
 
 - **Vanilla JS puro.** Sin frameworks, sin TypeScript, sin bundlers, transpiladores ni paso de build. Los archivos `.js` se sirven tal cual con `<script>` clásicos (no módulos ES): las funciones de nivel superior son globales y se comparten entre archivos. No introducir `import`/`export`, npm runtime deps ni herramientas de compilación.
 - Sin dependencias externas en tiempo de ejecución: `xlsx.full.min.js` y `supabase.min.js` están vendorizados en la raíz. `supabase.min.js` es el build UMD de `@supabase/supabase-js` **2.117.3** (`dist/umd/supabase.js` del tarball de npm, integridad verificada; sha256 `d6a5c4414a5d4ce646d9c1de223aa7067d3ff664c15394ffeb7fcffc763354a3`). Para actualizarlo, repetir ese proceso con una versión fija y actualizar esta línea. No volver a cargar scripts desde un CDN: la CSP lo bloquea.
-- **CSP** (meta en `index.html` y `admin.html`): `script-src 'self'` + el hash del script del tema. Si cambias ese script en línea, recalcula su hash (`sha256-…` de su contenido exacto) en ambos archivos. Nada de `<script>` en línea nuevos, atributos `on*=` ni `eval`.
+- **CSP** (meta en `index.html` y `admin.html`): `script-src 'self'` + el hash del script del tema. Si cambias ese script en línea, recalcula su hash (`sha256-…` de su contenido exacto) en ambos archivos y en `_headers` (cabeceras de Cloudflare). Nada de `<script>` en línea nuevos, atributos `on*=` ni `eval`.
 - Los scripts también se cargan en Node para las pruebas de `scratch/`: protege el acceso a `window`, `document`, `navigator` y `localStorage` con `typeof … !== 'undefined'` o `try/catch`.
 - Comentarios y textos de interfaz en español.
 
