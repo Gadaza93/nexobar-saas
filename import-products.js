@@ -9,6 +9,25 @@
   let currentParsedItems = [];
   let currentFile = null;
 
+  // SheetJS (~900 KB) ya no se carga al arrancar: se pide la primera vez que hace falta y queda en caché.
+  // Es un archivo propio (CSP 'self') y el service worker lo guarda, así que funciona sin conexión.
+  let xlsxLoading = null;
+  function loadXlsxLib() {
+    const ready = () => (typeof XLSX !== 'undefined' ? XLSX : globalThis.XLSX) || null;
+    if (ready()) return Promise.resolve(ready());
+    if (typeof document === 'undefined' || typeof document.createElement !== 'function') return Promise.resolve(null);
+    if (!xlsxLoading) {
+      xlsxLoading = new Promise(resolve => {
+        const script = document.createElement('script');
+        script.src = './xlsx.full.min.js';
+        script.onload = () => resolve(ready());
+        script.onerror = () => { xlsxLoading = null; script.remove(); resolve(null); };
+        document.head.appendChild(script);
+      });
+    }
+    return xlsxLoading;
+  }
+
   // 1. Normalización de encabezados (sin tildes, minúsculas, sin caracteres especiales)
   function normalizeHeader(h) {
     if (!h) return '';
@@ -158,7 +177,7 @@
   }
 
   // 4. Descarga de la plantilla estándar (.xlsx con fallback a .csv)
-  function downloadProductTemplate() {
+  async function downloadProductTemplate() {
     const headers = ['Categoría', 'Nombre ítem', 'Precio Venta', 'Costo Unitario', 'Stock Actual', 'Stock Mínimo', 'Unidad', 'Código'];
     const sampleRows = [
       ['Cervezas', 'Cerveza Corona 330ml', 9000, 4800, 48, 12, 'Unidad', '770123456789'],
@@ -168,7 +187,7 @@
       ['Snacks', 'Papas Pringles Original 124g', 14000, 7500, 20, 5, 'Unidad', 'SNK-002']
     ];
 
-    const xlsxLib = (typeof XLSX !== 'undefined') ? XLSX : (typeof globalThis !== 'undefined' ? globalThis.XLSX : null);
+    const xlsxLib = await loadXlsxLib();
 
     if (xlsxLib && typeof xlsxLib.utils === 'object') {
       try {
@@ -218,6 +237,7 @@
     }
 
     resetImportDialog();
+    loadXlsxLib(); // se adelanta la descarga mientras el usuario elige el archivo
     const dlg = document.querySelector('#importProductsDialog');
     if (dlg) {
       if (typeof dlg.showModal === 'function') dlg.showModal();
@@ -259,9 +279,9 @@
   async function parseProductFile(file) {
     if (!file) return;
 
-    const xlsxLib = (typeof XLSX !== 'undefined') ? XLSX : (typeof globalThis !== 'undefined' ? globalThis.XLSX : null);
+    const xlsxLib = await loadXlsxLib();
     if (!xlsxLib) {
-      showErrorAlert('La librería para procesar Excel no está disponible. Verifica tu conexión.');
+      showErrorAlert('La librería para procesar Excel no se pudo cargar. Recarga la app e inténtalo de nuevo.');
       return;
     }
 

@@ -4,7 +4,7 @@
 body { font-family: var(--font-ui); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
 h1, h2, h3 { font-family: var(--font-display); letter-spacing: .01em; }
 ::selection { background: var(--accent-soft); color: var(--text); }
-::placeholder { color: var(--faint); }
+::placeholder { color: var(--muted); opacity: 1; } /* --faint no llega a 4.5:1 sobre los campos (WCAG AA) */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 3px rgba(255, 140, 50, 0.25); }
 * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 .eyebrow { text-transform: lowercase; letter-spacing: .02em; font-weight: 600; font-size: 12px; color: var(--muted); }
@@ -147,6 +147,8 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 .activation-message { margin: 0; min-height: 18px; text-align: center; }
 .activation-message.is-info { color: var(--muted); font-weight: 600; }
 .activation-primary, .activation-secondary { width: 100%; min-height: 48px; font-size: 15px; }
+/* Texto grafito sobre el naranja: el blanco da 2.3:1 y WCAG AA pide 4.5:1 */
+.activation-primary { color: var(--ink); }
 .activation-primary:disabled, .activation-secondary:disabled { opacity: .6; cursor: progress; }
 .activation-secondary { margin-top: -4px; }
 .activation-foot { margin: 16px 0 0; font-size: 11px; }
@@ -980,21 +982,19 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3) !important;
 }
 
+/* Solo transform y opacity: animaciones compuestas en GPU */
 @keyframes syncPulse {
   0% {
     transform: scale(0.9);
     opacity: 0.6;
-    box-shadow: 0 0 0 0 rgba(255, 140, 50, 0.6);
   }
   70% {
     transform: scale(1.2);
     opacity: 1;
-    box-shadow: 0 0 0 6px rgba(255, 140, 50, 0);
   }
   100% {
     transform: scale(0.9);
     opacity: 0.6;
-    box-shadow: 0 0 0 0 rgba(255, 140, 50, 0);
   }
 }
 

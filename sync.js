@@ -2240,9 +2240,10 @@ function init() {
   }, 300);
 }
 
-// Inicialización segura al cargar
+// Inicialización segura al cargar. Con los scripts en defer el estado ya es "interactive" pero DOMContentLoaded aún no
+// se disparó: se espera igual al evento para que init() corra después de app.js y no dos veces (bootstrap la repite)
 if (typeof document !== "undefined") {
-  if (document.readyState === "loading") {
+  if (document.readyState !== "complete") {
     document.addEventListener("DOMContentLoaded", init);
   } else {
     setTimeout(init, 100);

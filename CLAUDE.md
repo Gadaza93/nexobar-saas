@@ -39,18 +39,17 @@ POS para bares (antes "Brasa POS"), en español de Colombia (`es-CO`, pesos sin 
 En `<head>`:
 1. Meta CSP (primera, antes de cualquier script).
 2. Script inline del tema (`nexobar-theme` / `brasa-theme` en `localStorage` → `data-theme="light"`), antes del CSS para evitar parpadeo. Su hash está en la CSP.
-3. `supabase.min.js` (local).
+3. `supabase.min.js` (local, con `defer`).
 4. `theme.css` → `styles.css` → `design.css`.
 
-Al final de `<body>` (el orden importa, solo `app.js` ejecuta el arranque):
-1. `xlsx.full.min.js`
-2. `demo-mode.js` — debe ir antes que todo lo que llame a `isDemoMode()`.
-3. `storage.js` — solo declaraciones de persistencia.
-4. `modules.js` — vistas/render (facturas, reportes, etc.).
-5. `sync.js` — `NexoSync`.
-6. `import-products.js` — importación de productos desde Excel.
-7. `print.js` — plantillas de tickets térmicos (58/80 mm) y `printReceipt()`: en escritorio vía `desktop.printReceipt` (ventana oculta en `main.js`), en web con un `<iframe>` invisible. No usar `window.open` para imprimir: en Electron está bloqueado.
-8. `app.js` — estado, lógica de negocio y `bootstrap()`.
+Al final de `<body>`, todos con `defer` (se ejecutan en este orden al terminar de leer el HTML; solo `app.js` ejecuta el arranque). Un `init` automático debe esperar a `DOMContentLoaded` mientras `readyState !== "complete"`, no solo en `"loading"`:
+1. `demo-mode.js` — debe ir antes que todo lo que llame a `isDemoMode()`.
+2. `storage.js` — solo declaraciones de persistencia.
+3. `modules.js` — vistas/render (facturas, reportes, etc.).
+4. `sync.js` — `NexoSync`.
+5. `import-products.js` — importación de productos desde Excel. Carga `xlsx.full.min.js` bajo demanda (`loadXlsxLib()`) al abrir el importador o descargar la plantilla; no lo vuelvas a poner en `index.html`.
+6. `print.js` — plantillas de tickets térmicos (58/80 mm) y `printReceipt()`: en escritorio vía `desktop.printReceipt` (ventana oculta en `main.js`), en web con un `<iframe>` invisible. No usar `window.open` para imprimir: en Electron está bloqueado.
+7. `app.js` — estado, lógica de negocio y `bootstrap()`.
 
 ## Estilos: paleta Obsidian
 
