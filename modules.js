@@ -1101,7 +1101,9 @@ function printReport() {
    del salón no arrastra nada: tocar una mesa abre su pedido como siempre (data-table).
    Sincronización: la distribución viaja en state.profile.floorPlan, que ya va dentro de negocios.configuracion en todas
    las subidas; la otra caja la aplica si su updatedAt es más reciente (applyRemoteFloorPlan). */
-const FLOOR_SIZE = { mesa: { w: 10, h: 16 }, mostrador: { w: 22, h: 11 } }; // % del ancho y % del alto del lienzo
+// Huella (tablero + sillas) en % del ancho y del alto del escenario 16:10. En un lienzo de ~1000 px el tablero de la mesa
+// mide ~108×96 px y el de la barra ~205×80 px (ver .floor-body en design.css).
+const FLOOR_SIZE = { mesa: { w: 12, h: 21 }, mostrador: { w: 21, h: 18.5 } };
 const TABLE_VIEW_KEY = 'nexobar-table-view';
 let floorDraft = null, floorDirty = false, floorSelected = null, floorDrag = null;
 let tableView = (() => { try { return localStorage.getItem(TABLE_VIEW_KEY) || 'plano'; } catch { return 'plano'; } })();
@@ -1130,9 +1132,11 @@ function defaultFloorLayout(tables) {
   const zoneOrder = [...new Set(tables.map(t => t.zone))], counters = tables.filter(t => t.tipo === 'mostrador');
   const mesas = tables.filter(t => t.tipo !== 'mostrador').sort((a, b) => zoneOrder.indexOf(a.zone) - zoneOrder.indexOf(b.zone));
   const cCols = Math.max(1, Math.min(4, counters.length));
-  counters.forEach((t, i) => Object.assign(t, clampFloorPos('mostrador', (i % cCols + 0.5) * 100 / cCols, 8 + Math.floor(i / cCols) * 13)));
-  const top = counters.length ? 8 + Math.ceil(counters.length / cCols) * 13 - 4 : 2;
-  const cols = Math.max(1, Math.min(8, Math.ceil(Math.sqrt(mesas.length * 1.6)))), rows = Math.max(1, Math.ceil(mesas.length / cols));
+  const step = FLOOR_SIZE.mostrador.h + 2; // filas de barras sin tocarse
+  counters.forEach((t, i) => Object.assign(t, clampFloorPos('mostrador', (i % cCols + 0.5) * 100 / cCols, (Math.floor(i / cCols) + 0.5) * step)));
+  const top = counters.length ? Math.ceil(counters.length / cCols) * step : 0;
+  const maxCols = Math.floor(100 / (FLOOR_SIZE.mesa.w + 1)); // columnas que caben sin que las mesas se toquen
+  const cols = Math.max(1, Math.min(maxCols, Math.ceil(Math.sqrt(mesas.length * 1.6)))), rows = Math.max(1, Math.ceil(mesas.length / cols));
   mesas.forEach((t, i) => Object.assign(t, clampFloorPos('mesa', (i % cols + 0.5) * 100 / cols, top + (Math.floor(i / cols) + 0.5) * (100 - top) / rows)));
 }
 function ensureTableLayout(tables) {
@@ -1149,12 +1153,12 @@ function floorItemStyle(t) { return `left:${t.posX}%;top:${t.posY}%`; }
 /* ---------- Vista operativa (Salón) ---------- */
 function renderFloorLive(tables) {
   const el = document.querySelector('#tableFloor'); if (!el) return;
-  if (!tables.length) { el.innerHTML = '<p class="muted floor-empty">No hay mesas en esta zona.</p>'; return; }
-  el.innerHTML = tables.map(table => {
+  if (!tables.length) { el.innerHTML = '<div class="floorplan-stage"><p class="muted floor-empty">No hay mesas en esta zona.</p></div>'; return; }
+  el.innerHTML = '<div class="floorplan-stage">' + tables.map(table => {
     const order = activeOrderForTable(table.id), tipo = tableTipo(table), long = order && Date.now() - (order.createdAt || Date.now()) >= 120 * 60000;
-    const status = order ? `<span class="floor-amount">${money.format(orderPending(order))}</span><span class="floor-time ${long ? 'long' : ''}">${escapeHtml(elapsedLabel(order.createdAt))}</span>` : '<span class="floor-status">Disponible</span>';
-    return `<button type="button" class="floor-item ${tipo} ${order ? 'occupied' : 'free'}" data-table="${escapeHtml(table.id)}" style="${floorItemStyle(table)}" title="${escapeHtml(`${table.name} · ${table.zone}${order ? ' · ' + money.format(orderPending(order)) : ' · Disponible'}`)}"><span class="floor-name">${escapeHtml(table.name)}</span>${status}</button>`;
-  }).join('');
+    const status = order ? `<span class="floor-amount">${money.format(orderPending(order))}</span><span class="floor-time ${long ? 'long' : ''}">${escapeHtml(elapsedLabel(order.createdAt).replace(/^Abierta hace /, ''))}</span>` : '<span class="floor-status">Disponible</span>';
+    return `<button type="button" class="floor-item ${tipo} ${order ? 'occupied' : 'free'}" data-table="${escapeHtml(table.id)}" style="${floorItemStyle(table)}" title="${escapeHtml(`${table.name} · ${table.zone}${order ? ' · ' + money.format(orderPending(order)) : ' · Disponible'}`)}"><span class="floor-body"><span class="floor-name">${escapeHtml(table.name)}</span>${status}</span></button>`;
+  }).join('') + '</div>';
 }
 
 /* ---------- Diseñador (Configuración) ---------- */
@@ -1166,8 +1170,8 @@ function renderFloorDesigner() {
   const canvas = document.querySelector('#floorplan-designer'); if (!canvas || floorDrag) return; // no repintar a mitad de un arrastre
   if (!floorDirty) { floorDraft = null; if (floorSelected && !state.tables.some(t => t.id === floorSelected)) floorSelected = null; }
   const tables = floorTables(), isDemo = typeof isDemoMode === 'function' && isDemoMode();
-  canvas.innerHTML = tables.length ? tables.map(t => `<div class="floor-item ${tableTipo(t)} ${t.id === floorSelected ? 'selected' : ''} ${activeOrderForTable(t.id) ? 'occupied' : 'free'}" data-floor-item="${escapeHtml(t.id)}" role="button" tabindex="0" aria-label="${escapeHtml(`${t.name}, ${tableTipo(t) === 'mostrador' ? 'mostrador' : 'mesa'}. Arrastra para moverla.`)}" style="${floorItemStyle(t)}"><span class="floor-name">${escapeHtml(t.name)}</span><span class="floor-zone">${escapeHtml(t.zone || '')}</span></div>`).join('')
-    : '<p class="muted floor-empty">Aún no hay mesas. Usa «+ Mesa» o «+ Mostrador/Barra».</p>';
+  canvas.innerHTML = '<div class="floorplan-stage">' + (tables.length ? tables.map(t => `<div class="floor-item ${tableTipo(t)} ${t.id === floorSelected ? 'selected' : ''} ${activeOrderForTable(t.id) ? 'occupied' : 'free'}" data-floor-item="${escapeHtml(t.id)}" role="button" tabindex="0" aria-label="${escapeHtml(`${t.name}, ${tableTipo(t) === 'mostrador' ? 'mostrador' : 'mesa'}. Arrastra para moverla.`)}" style="${floorItemStyle(t)}"><span class="floor-body"><span class="floor-name">${escapeHtml(t.name)}</span><span class="floor-zone">${escapeHtml(t.zone || '')}</span></span></div>`).join('')
+    : '<p class="muted floor-empty">Aún no hay mesas. Usa «+ Mesa» o «+ Mostrador/Barra».</p>') + '</div>';
   const sel = tables.find(t => t.id === floorSelected), editor = document.querySelector('#floorEditor');
   if (editor) editor.innerHTML = sel ? `<div class="floor-editor-row">
       <label><span class="field-label">Nombre</span><input id="floorItemName" type="text" maxlength="40" value="${escapeHtml(sel.name)}" /></label>
@@ -1229,7 +1233,8 @@ function applyRemoteFloorPlan(remote, localPlan = state.profile?.floorPlan) {
   return true;
 }
 function handleFloorPointerDown(event) {
-  const item = event.target.closest?.('[data-floor-item]'), canvas = item?.closest('#floorplan-designer');
+  // Las posiciones son % del escenario interior (sin el margen perimetral del lienzo): se mide ese rectángulo
+  const item = event.target.closest?.('[data-floor-item]'), canvas = item?.closest('#floorplan-designer') && item.closest('.floorplan-stage');
   if (!item || !canvas || event.button > 0) return;
   const t = beginFloorDraft().find(x => x.id === item.dataset.floorItem); if (!t) return;
   event.preventDefault();

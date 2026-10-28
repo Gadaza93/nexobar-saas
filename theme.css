@@ -52,6 +52,15 @@
 
   --shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
+  /* Plano de mesas: piso, mesas vistas desde arriba, sillas/taburetes y cubierta de la barra */
+  --floor-bg: #1D2027;
+  --floor-edge: rgba(255, 255, 255, 0.06);
+  --floor-inset: inset 0 1px 18px rgba(0, 0, 0, 0.45);
+  --floor-table: #2C303B;
+  --floor-chair: #4A5163;
+  --floor-bar-top: #6B4A2E;          /* madera oscura */
+  --floor-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+  --floor-shadow-lift: 0 10px 22px rgba(0, 0, 0, 0.55);
   --r-sm: 8px;
   --r-md: 14px;
   --r-lg: 22px;
@@ -107,4 +116,12 @@ html[data-theme="light"] {
 
   --shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
   --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.05);
+  --floor-bg: #F4F1EC;               /* piso claro cálido */
+  --floor-edge: #E5E0D8;
+  --floor-inset: inset 0 1px 16px rgba(15, 23, 42, 0.07);
+  --floor-table: #FFFFFF;
+  --floor-chair: #CBD5E1;
+  --floor-bar-top: #7A5534;
+  --floor-shadow: 0 3px 10px rgba(15, 23, 42, 0.10);
+  --floor-shadow-lift: 0 10px 22px rgba(15, 23, 42, 0.16);
 }

@@ -10,7 +10,8 @@
     "start": "electron .",
     "electron:start": "electron .",
     "electron:build": "electron-builder --win",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "build": "echo Compilación web lista"
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",

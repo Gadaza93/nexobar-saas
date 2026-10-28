@@ -1526,38 +1526,50 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 @media (max-width: 768px) { .report-subtabs { overflow-x: auto; } .report-subtab { white-space: nowrap; } .inventory-value-panel .report-filters .outline-button { width: 100%; } }
 
 /* ---------- Plano de mesas (salón y diseñador) ----------
-   Lienzo 16:10 que escala con su ancho; posiciones y tamaños de las mesas en % (ver FLOOR_SIZE en modules.js:
-   mesa 10% × 16%, mostrador 22% × 11%). En pantallas altas se limita el ancho para no desbordar en vertical, y en
-   teléfonos el lienzo conserva un ancho mínimo legible y se desplaza dentro de su contenedor. */
+   Lienzo con 30 px de margen perimetral y, dentro, un escenario 16:10 (.floorplan-stage) que escala con su ancho;
+   posiciones y tamaños son % del escenario (FLOOR_SIZE en modules.js: mesa 12% × 21%, mostrador 21% × 18,5%). Cada .floor-item es la huella completa (tablero + sillas), así nada se sale del lienzo y el
+   cálculo de huecos libres sigue valiendo. Dentro, .floor-body es el tablero visto desde arriba y ::before dibuja las
+   sillas (mesa) o los taburetes (barra) detrás de él. Colores en theme.css (--floor-*). */
 .floorplan-wrap { width: 100%; overflow-x: auto; overscroll-behavior-x: contain; padding-bottom: 2px; }
-.floorplan { position: relative; width: min(100%, calc(70vh * 1.6)); min-width: 560px; aspect-ratio: 16 / 10; margin: 0 auto; container-type: inline-size; background-color: var(--surface); background-image: radial-gradient(var(--line-strong) 1px, transparent 1.4px); background-size: 4% 6.4%; border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; }
+.floorplan { position: relative; width: min(100%, calc(80vh * 1.6 + 60px)); min-width: 560px; padding: 30px; margin: 0 auto; container-type: inline-size; background: var(--floor-bg); border: 1px solid var(--floor-edge); border-radius: var(--r-md); box-shadow: var(--floor-inset); overflow: hidden; }
+.floorplan-stage { position: relative; width: 100%; aspect-ratio: 16 / 10; }
 .floor-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 16px; text-align: center; }
-.floor-item { position: absolute; transform: translate(-50%, -50%); width: 10%; height: 16%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.2em; padding: 0.35em; border: 2px solid var(--line-strong); border-radius: var(--r-md); background: var(--surface-2); color: var(--text); font-family: var(--font-ui); font-size: clamp(10px, 1.35cqw, 15px); line-height: 1.15; text-align: center; overflow: hidden; transition: transform 0.12s ease, box-shadow 0.15s ease, border-color 0.15s ease; }
-.floor-item.mostrador { width: 22%; height: 11%; border-radius: 999px; flex-direction: row; gap: 0.6em; padding: 0.35em 1em; }
-.floor-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-display); font-weight: 700; font-size: 1.05em; }
-.floor-status, .floor-zone { font-size: 0.8em; color: var(--muted); white-space: nowrap; }
-.floor-amount { font-family: var(--font-display); font-weight: 700; font-size: 1em; color: var(--danger); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.floor-time { font-size: 0.72em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.floor-item { --floor-state: var(--success); position: absolute; transform: translate(-50%, -50%); width: 12%; height: 21%; padding: 0; margin: 0; border: 0; background: transparent; color: var(--text); font-family: var(--font-ui); font-size: clamp(10px, 1.35cqw, 15px); line-height: 1.15; text-align: center; appearance: none; -webkit-appearance: none; }
+.floor-item.occupied { --floor-state: var(--danger); }
+.floor-item.mostrador { width: 21%; height: 18.5%; }
+/* Tablero: tarjeta sólida con franja de estado de 6px a la izquierda */
+.floor-body { position: absolute; z-index: 1; inset: 13.5% 5%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.18em; padding: 0.3em 0.45em 0.3em calc(6px + 0.45em); background: var(--floor-table); border-radius: 12px; box-shadow: var(--floor-shadow); overflow: hidden; transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.floor-body::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: var(--floor-state); } /* franja de estado; el radio del tablero la recorta */
+.floor-item.mostrador .floor-body { inset: 0 0 30% 0; flex-direction: row; gap: 0.7em; border-top: 4px solid var(--floor-bar-top); border-radius: 8px 8px 12px 12px; }
+/* Sillas: dos arriba y dos abajo; el tablero tapa media silla y queda el semicírculo, como en un plano cenital */
+.floor-item.mesa::before { content: ""; position: absolute; inset: 0 16%; pointer-events: none;
+  background:
+    radial-gradient(circle closest-side, var(--floor-chair) 92%, transparent 100%) 0 0 / 50% 27% repeat-x,
+    radial-gradient(circle closest-side, var(--floor-chair) 92%, transparent 100%) 0 100% / 50% 27% repeat-x; }
+/* Taburetes: fila de 8 círculos a lo largo del frente de la barra */
+.floor-item.mostrador::before { content: ""; position: absolute; left: 4%; right: 4%; bottom: 1%; height: 26%; pointer-events: none; background: radial-gradient(circle closest-side, var(--floor-chair) 76%, transparent 84%) 0 50% / calc(100% / 8) 100% repeat-x; }
+.floor-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-display); font-weight: 700; font-size: clamp(0.85rem, 1.75cqw, 1.1rem); color: var(--text); }
+.floor-status, .floor-zone { font-size: clamp(0.72rem, 1.45cqw, 0.9rem); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.floor-item.free .floor-status { color: var(--success); font-weight: 600; }
+.floor-amount { font-family: var(--font-display); font-weight: 700; font-size: clamp(0.72rem, 1.45cqw, 0.9rem); color: var(--danger); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.floor-time { font-size: clamp(0.64rem, 1.15cqw, 0.78rem); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .floor-time.long { color: var(--danger); font-weight: 700; }
 .floor-item.mostrador .floor-time { display: none; }
-/* Salón: verde disponible, rojo ocupada con saldo; tocar abre el pedido (sin arrastre) */
+/* Salón: tocar abre el pedido (sin arrastre); al pasar o pulsar, el tablero se eleva */
 .floorplan-live .floor-item { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-.floorplan-live .floor-item.free { border-color: var(--success); background: var(--success-soft); }
-.floorplan-live .floor-item.free .floor-status { color: var(--success); font-weight: 700; }
-.floorplan-live .floor-item.occupied { border-color: var(--danger); background: var(--danger-soft); }
-.floorplan-live .floor-item:hover { transform: translate(-50%, -50%) scale(1.04); box-shadow: var(--shadow-sm); }
-.floorplan-live .floor-item:active { transform: translate(-50%, -50%) scale(0.97); }
-.floorplan-live .floor-item:focus-visible, .floorplan-designer .floor-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.floorplan-live .floor-item:hover .floor-body, .floorplan-live .floor-item:active .floor-body, .floorplan-designer .floor-item:hover .floor-body { transform: translateY(-2px); box-shadow: var(--floor-shadow-lift); }
+.floorplan-live .floor-item:focus-visible { outline: none; }
+.floorplan-live .floor-item:focus-visible .floor-body, .floorplan-designer .floor-item:focus-visible .floor-body { outline: 2px solid var(--accent); outline-offset: 2px; }
 .table-view-toggle button { white-space: nowrap; }
 .floor-edit-link { font-size: 12px; padding: 7px 12px; }
 /* Diseñador: arrastrable con mouse y táctil */
 .floor-designer-card { margin-top: 18px; }
 .floor-designer-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .floor-designer-head p { max-width: 560px; margin-top: 4px; }
-.floorplan-designer .floor-item { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
-.floorplan-designer .floor-item.occupied { border-color: var(--danger); }
-.floorplan-designer .floor-item.selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-line); }
-.floorplan-designer .floor-item.dragging { cursor: grabbing; z-index: 2; box-shadow: var(--shadow); transition: none; }
+.floorplan-designer .floor-item { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; outline: none; }
+.floorplan-designer .floor-item.selected .floor-body { box-shadow: 0 0 0 2px var(--accent), var(--floor-shadow); }
+.floorplan-designer .floor-item.dragging { cursor: grabbing; z-index: 2; outline: 1.5px dashed var(--accent-line); outline-offset: 2px; border-radius: 14px; }
+.floorplan-designer .floor-item.dragging .floor-body { transform: translateY(-2px); box-shadow: 0 0 0 2px var(--accent), var(--floor-shadow-lift); transition: none; }
 .floor-editor { margin-top: 14px; }
 .floor-editor-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
 .floor-editor-row label { display: grid; gap: 4px; min-width: 180px; flex: 1 1 180px; }
@@ -1565,3 +1577,13 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 .floor-editor-row .floor-delete:disabled { opacity: 0.45; cursor: not-allowed; }
 .floor-dirty { margin: 10px 0 0; font-size: 12px; }
 @media (max-width: 768px) { .floor-designer-head .inline-actions { width: 100%; } .floor-designer-head .inline-actions button { flex: 1 1 140px; } .section-actions .table-view-toggle { order: -1; } }
+
+/* ---------- Arranque: el POS no se muestra hasta validar la terminal ----------
+   index.html nace con html.is-booting; bootstrap() (app.js) la quita solo después de comprobar la vinculación y
+   renderizar el estado real. Mientras tanto queda un fondo grafito (el mismo del modal de vinculación) y, si la
+   espera se alarga, un indicador discreto. Los <dialog> son hermanos de .app-shell, así que siguen visibles. */
+html.is-booting body { background: var(--ink); }
+html.is-booting .app-shell, html.is-booting .mobile-drawer, html.is-booting .mobile-overlay { visibility: hidden; }
+html.is-booting body::after { content: ''; position: fixed; top: 50%; left: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border: 3px solid var(--ink-line); border-top-color: var(--accent); border-radius: 50%; opacity: 0; animation: boot-fade .2s ease .35s forwards, boot-spin .8s linear infinite; }
+@keyframes boot-spin { to { transform: rotate(360deg); } }
+@keyframes boot-fade { to { opacity: 1; } }

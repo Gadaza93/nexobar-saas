@@ -2399,11 +2399,17 @@ async function syncOnStartup() {
 }
 globalThis.syncOnStartup = syncOnStartup;
 
+// Quita el telón de arranque (html.is-booting en index.html): hasta aquí el POS permanece oculto
+function revealApp() {
+  if (typeof document !== 'undefined') document.documentElement?.classList?.remove('is-booting');
+}
+
 async function bootstrap() {
   let saved;
   try { saved = await storageInit(); }
   catch (error) {
     console.error(error);
+    revealApp();
     document.body.insertAdjacentHTML('afterbegin', `<div class="fatal-error"><strong>No se pudo abrir la base de datos.</strong><br>Cierra otras ventanas de la app y recarga. Tus datos no se modificaron. (${escapeHtml(String(error.message || error))})</div>`);
     return;
   }
@@ -2458,12 +2464,14 @@ async function bootstrap() {
     renderAll();
     initModules();
     enforceSubscription(); // suscripción suspendida (guardada o recién descargada): bloquea el POS
+    revealApp(); // terminal validada y estado real ya pintado: recién ahora se ve el POS
     startBackupSchedule();
     if (globalThis.NexoSync?.init) globalThis.NexoSync.init();
     setInterval(() => { renderSubscription(); if (document.visibilityState === 'visible' && !document.querySelector('dialog[open]')) renderTables(); }, 60000); // el aviso de vencimiento cuenta los días sin recargar
   }
   catch (error) {
     console.error(error);
+    revealApp();
     document.body.insertAdjacentHTML('afterbegin', `<div class="fatal-error"><strong>La app tuvo un error al iniciar.</strong> Tus datos están a salvo; descarga un respaldo y avísanos. (${escapeHtml(String(error.message || error))})</div>`);
   }
 }

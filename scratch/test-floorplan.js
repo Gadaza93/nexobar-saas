@@ -67,7 +67,7 @@ tables = get('state.tables');
 assert.deepStrictEqual([tables[0].posX, tables[0].posY], [30, 40]);
 assert.ok(Number.isFinite(tables[1].posX) && !overlap(tables[0], tables[1]));
 run(`state.tables = ensureTableLayout([{ id: 'z', name: 'Z', zone: 'Salón', tipo: 'mesa', posX: 150, posY: -20 }]);`);
-assert.deepStrictEqual(get('[state.tables[0].posX, state.tables[0].posY]'), [94.5, 8.5], 'Coordenadas fuera de rango se ajustan al borde');
+assert.deepStrictEqual(get('[state.tables[0].posX, state.tables[0].posY]'), [93.5, 11], 'Coordenadas fuera de rango se ajustan al borde');
 console.log('   ✅ Se conservan posiciones guardadas, las mesas sin coordenadas buscan un hueco libre y nada se sale del lienzo.');
 
 // --- C. Vista operativa: plano y cuadrícula; tocar una mesa abre su pedido ---
@@ -100,7 +100,7 @@ assert.strictEqual(newMesa.name, 'Mesa 5'); assert.strictEqual(newBar.name, 'Bar
 for (const t of draft.slice(0, 10)) assert.ok(!overlap(newMesa, t) && !overlap(newBar, t), 'Lo nuevo aparece en un hueco libre');
 // Arrastre: 80 px a la derecha y 50 px abajo en un lienzo de 800×500 → +10 % y +10 %
 run(`var item = { dataset: { floorItem: ${JSON.stringify(newMesa.id)} }, style: {}, classList: { add() {} }, setPointerCapture() {} };
-  item.closest = sel => sel === '[data-floor-item]' ? item : sel === '#floorplan-designer' ? els_canvas : null;
+  item.closest = sel => sel === '[data-floor-item]' ? item : (sel === '#floorplan-designer' || sel === '.floorplan-stage') ? els_canvas : null;
   var els_canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 500 }) };
   handleFloorPointerDown({ target: { closest: s => item.closest(s) }, button: 0, pointerId: 7, clientX: 100, clientY: 100, preventDefault() {} });
   handleFloorPointerMove({ pointerId: 7, clientX: 180, clientY: 150 });
