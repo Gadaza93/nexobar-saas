@@ -18,6 +18,8 @@ POS para bares (antes "Brasa POS"), en español de Colombia (`es-CO`, pesos sin 
 - **Sincronización diferida (`sync.js`, objeto global `NexoSync`).** Cada registro lleva `sync_status` (`nuevo_local`/`pending` → `synced`). Se suben en lote a Supabase cuando hay conexión (`scheduleSync`, evento `online`) y se descargan con `pullAllFromSupabase`. Los datos del negocio se separan por `business_id` (por defecto `nexobar_default`).
 - **Descargas siempre paginadas.** PostgREST corta en 1000 filas por consulta: nunca leer una tabla con `select()` sin paginar. Usa `fetchAllRows` (tablas pequeñas: productos, proveedores) o `fetchMissingRows` (tablas que crecen: ventas, gastos, mermas; baja solo ids y luego las filas que faltan). Los borrados remotos se aplican localmente solo si la lista de ids llegó completa. Prueba: `scratch/test-pull-pagination.js`.
 - **Pedidos abiertos: `pedidos_activos`, no `negocios`.** Si la tabla tiene la columna `meta` (migración de Supabase: `alter table pedidos_activos add column meta jsonb` + la tabla en la publicación `supabase_realtime`), `usaTablaPedidos` activa el modo tabla: cada pedido viaja como su fila (el pedido completo en `meta`), solo suben los que tienen cambios y `negocios.configuracion` deja de llevar `orders`. Sin la columna se mantiene el modo anterior (`configuracion.orders`). Toda escritura de `negocios.configuracion` pasa por `configuracionNegocio()`. El tiempo real de `pedidos_activos` trae un pedido por evento: se aplica con `mergeRemoteOrders([...], { completa: false })`, nunca como lista completa. Prueba: `scratch/test-pedidos-tabla.js`.
+- **Fila `negocios`: solo `actualizarNegocio()`.** En Supabase las cajas solo pueden actualizar `nombre` y `configuracion` (permisos por columna) y no crean filas (las crea `admin_create_negocio`); así un bar no puede tocar `activo`, `plan` ni `fecha_vencimiento`. Nunca `upsert` ni otras columnas: Supabase lo rechaza con 403. `scratch/mock-supabase.js` replica estos permisos.
+- **PIN de administrador sin texto plano.** En la nube solo `admin_salt`, `admin_hash` y `admin_pin_at`; `setUserPin` estampa `pinAt` y al descargar gana el PIN más reciente (`applyAdminPinLocally`). Un PIN de 4 dígitos con su sal se puede probar por fuerza bruta: no es un secreto frente a quien ya tiene acceso técnico a una caja. Prueba: `scratch/test-negocios-permisos.js`.
 - **Nunca bloquear la venta por la red.** Toda operación se completa en local primero; los fallos de Supabase solo cambian el indicador de sincronización.
 - Si `supabase.min.js` no cargó, `getClient()` devuelve `null`, la app trabaja offline y `loadSupabaseLib()` reintenta desde el mismo archivo local.
 
@@ -35,17 +37,18 @@ El esquema no está en el repositorio: estos pasos se aplican a mano en el proye
    create index if not exists pedidos_activos_negocio_idx on public.pedidos_activos (business_id);
    create index if not exists turnos_caja_negocio_idx     on public.turnos_caja (business_id, estado, created_at desc);
    ```
-2. **Pedidos en tabla propia** — solo cuando **todas** las cajas tengan la versión con `usaTablaPedidos` (las de Windows necesitan instalador nuevo); activa el modo en todas a la vez:
+2. **Tiempo real**: la publicación `supabase_realtime` ya incluye `negocios`, `pedidos_activos`, `productos`, `turnos_caja` y `ventas` (28-10-2026). Si se agrega otra tabla que la app escuche en `setupRealtime`, hay que agregarla también aquí.
+3. **Pedidos en tabla propia** — solo cuando **todas** las cajas tengan la versión con `usaTablaPedidos` (las de Windows necesitan instalador nuevo); activa el modo en todas a la vez (la tabla ya está en el tiempo real; falta la columna):
    ```sql
    alter table public.pedidos_activos add column if not exists meta jsonb;
    do $ begin
      alter publication supabase_realtime add table public.pedidos_activos;
    exception when duplicate_object then null; end $;
    ```
-3. **Plan Pro** antes del primer cliente de pago (Organization → Billing). El plan gratuito pausa el proyecto tras una semana sin uso, tiene 500 MB de base de datos y no incluye copias de seguridad descargables.
-4. **Copias de seguridad**: Pro hace una copia diaria automática (Database → Backups). Para poder volver a un minuto exacto, activar el complemento Point in Time Recovery (costo aparte).
-5. **Alertas de uso**: Organization → Billing → dejar activado el *spend cap* hasta conocer el consumo real, y revisar Reports → Database (tamaño y conexiones) y Usage (transferencia) cada mes. Los avisos de uso llegan al correo de facturación configurado en Organization → Billing.
-6. **Revisión mensual del tamaño** (SQL Editor):
+4. **Plan Pro** antes del primer cliente de pago (Organization → Billing). El plan gratuito pausa el proyecto tras una semana sin uso, tiene 500 MB de base de datos y no incluye copias de seguridad descargables.
+5. **Copias de seguridad**: Pro hace una copia diaria automática (Database → Backups). Para poder volver a un minuto exacto, activar el complemento Point in Time Recovery (costo aparte).
+6. **Alertas de uso**: Organization → Billing → dejar activado el *spend cap* hasta conocer el consumo real, y revisar Reports → Database (tamaño y conexiones) y Usage (transferencia) cada mes. Los avisos de uso llegan al correo de facturación configurado en Organization → Billing.
+7. **Revisión mensual del tamaño** (SQL Editor):
    ```sql
    select relname as tabla, pg_size_pretty(pg_total_relation_size(relid)) as tamano, n_live_tup as filas
    from pg_stat_user_tables order by pg_total_relation_size(relid) desc;

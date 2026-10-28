@@ -58,12 +58,12 @@ async function runTests() {
 
   // Verificar en Supabase directamente
   const { data: negRow } = await sb.from("negocios").select("*").eq("id", DEFAULT_BUSINESS_ID).single();
-  const cloudPin = negRow?.admin_pin || negRow?.configuracion?.admin_pin;
-  console.log("   Supabase configuracion.admin_pin:", cloudPin);
-  if (cloudPin !== "2013") {
-    throw new Error(`PIN en Supabase (${cloudPin}) no coincide con 2013`);
-  }
-  console.log("   ✅ PIN 2013 persistido exitosamente en Supabase.");
+  // El PIN ya no viaja en texto plano: solo sal, hash y fecha del cambio
+  const cfg = negRow?.configuracion || {};
+  if ("admin_pin" in cfg || "adminPin" in cfg || "admin_pin" in (negRow || {})) throw new Error("El PIN se subió en texto plano a Supabase");
+  if (global.hashPin("2013", cfg.admin_salt) !== cfg.admin_hash) throw new Error("La sal y el hash en Supabase no corresponden al PIN 2013");
+  if (!(Number(cfg.admin_pin_at) > 0)) throw new Error("Falta la fecha del cambio de PIN (admin_pin_at)");
+  console.log("   ✅ PIN 2013 persistido en Supabase solo como sal + hash (sin texto plano).");
 
   // 3. Simular apertura en un NUEVO dispositivo o navegador (IndexedDB vacío)
   console.log("\n3. Simulando apertura de la app en un dispositivo o navegador NUEVO...");

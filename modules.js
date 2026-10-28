@@ -39,7 +39,7 @@ function hashPin(pin, salt) { return cyrb53(`${salt}:${pin}`); }
 function uid(prefix = 'id') { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 globalThis.uid = globalThis.uid || uid;
 function newUser(name, role, pin) { const salt = Math.random().toString(36).slice(2, 10); return { id: uid('usr'), name, role, salt, pinHash: hashPin(pin, salt), active: true, createdAt: Date.now() }; }
-function setUserPin(user, pin) { user.salt = Math.random().toString(36).slice(2, 10); user.pinHash = hashPin(pin, user.salt); }
+function setUserPin(user, pin) { user.salt = Math.random().toString(36).slice(2, 10); user.pinHash = hashPin(pin, user.salt); user.pinAt = Date.now(); } // pinAt: el PIN más reciente gana al sincronizar
 globalThis.cyrb53 = cyrb53;
 globalThis.hashPin = hashPin;
 globalThis.setUserPin = setUserPin;

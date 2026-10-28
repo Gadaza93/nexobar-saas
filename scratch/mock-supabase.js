@@ -16,6 +16,9 @@
 const clone = value => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 const scopeColumn = table => (table === 'negocios' ? 'id' : 'business_id');
 const denied = table => ({ code: '42501', message: `permission denied for table ${table}`, details: null, hint: null });
+// negocios como en producción: las cajas no crean filas y solo actualizan nombre y configuracion (permisos por columna)
+const NEGOCIOS_ACTUALIZABLES = ['nombre', 'configuracion'];
+const sinPermiso = table => ({ code: '42501', message: `permission denied for table ${table}`, details: null, hint: null });
 // Columnas conocidas por tabla (solo se valida pedidos_activos, la que cambia con la migración)
 const PEDIDOS_COLS = ['id', 'business_id', 'mesa_id', 'nombre_mesa', 'cliente', 'items', 'subtotal', 'total', 'estado', 'tipo', 'created_at', 'updated_at'];
 const rlsViolation = table => ({ code: '42501', message: `new row violates row-level security policy for table "${table}"`, details: null, hint: null });
@@ -25,6 +28,8 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
   const esquema = { pedidos_activos: pedidosConMeta ? [...PEDIDOS_COLS, 'meta'] : PEDIDOS_COLS };
   const columnaInexistente = (table, cols) => (esquema[table] ? cols.find(c => !esquema[table].includes(c)) : null);
   for (const [name, rows] of Object.entries(seed)) tables[name] = clone(rows);
+  // Como en producción, la fila del negocio de la sesión ya existe (la crea el SuperAdmin con admin_create_negocio)
+  if (businessId && !(tables.negocios || []).some(n => String(n.id) === String(businessId))) (tables.negocios = tables.negocios || []).push({ id: businessId, nombre: 'Negocio', telefono: '', configuracion: {}, activo: true });
   const tableRows = name => (tables[name] = tables[name] || []);
 
   let session = authenticated ? makeSession(businessId) : null;
@@ -56,6 +61,8 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
       const col = scopeColumn(table), rows = tableRows(table);
       const visible = rows.filter(row => String(row[col]) === String(bId));
 
+      if (table === 'negocios' && (state.action === 'upsert' || state.action === 'insert')) return { data: null, error: sinPermiso(table), count: null };
+      if (table === 'negocios' && state.action === 'update' && Object.keys(state.payload || {}).some(k => !NEGOCIOS_ACTUALIZABLES.includes(k))) return { data: null, error: sinPermiso(table), count: null };
       if (state.action === 'upsert' || state.action === 'insert') {
         const records = Array.isArray(state.payload) ? state.payload : [state.payload];
         const falta = columnaInexistente(table, [...new Set(records.flatMap(r => Object.keys(r || {})))]);

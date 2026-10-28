@@ -350,17 +350,30 @@ function sanitizeMerma(l, bId) {
    reescribía sin el PIN). Los pedidos solo se incluyen en el modo anterior: con la tabla de pedidos
    (usaTablaPedidos) cada pedido viaja en su propia fila y esta fila deja de reescribirse con cada comanda. */
 function configuracionNegocio(prof, { orders, cashShift } = {}) {
-  const { orders: _pedidosAnteriores, ...perfil } = prof || {}; // un perfil antiguo puede traer pedidos de una descarga
+  // Un perfil antiguo puede traer pedidos de una descarga y el PIN en texto plano: ninguno de los dos se sube
+  const { orders: _pedidosAnteriores, admin_pin: _pinPlano, adminPin: _pinPlano2, ...perfil } = prof || {};
   const admin = (typeof state !== "undefined" && Array.isArray(state?.users)) ? state.users.find(u => u.role === "admin") : null;
-  const adminPin = perfil.admin_pin || perfil.adminPin || (admin && !admin.mustChangePin && toCyrb53Hash(`${admin.salt}:2013`) === admin.pinHash ? "2013" : "");
   const pedidos = orders || ((typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : []);
   return {
     ...perfil,
     ...(ordersTableMode === true ? {} : { orders: pedidos }),
     cashShift: cashShift || ((typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" }),
-    ...(adminPin ? { admin_pin: adminPin, adminPin: adminPin } : {}),
-    ...(admin ? { admin_salt: admin.salt, admin_hash: admin.pinHash, mustChangePin: Boolean(admin.mustChangePin) } : {})
+    // PIN de administrador: solo sal y hash, con la fecha del cambio para que las cajas no lo pisen con uno más viejo
+    ...(admin ? { admin_salt: admin.salt, admin_hash: admin.pinHash, admin_pin_at: Number(admin.pinAt) || 0, mustChangePin: Boolean(admin.mustChangePin) } : {})
   };
+}
+
+/* Escritura de la fila del negocio. En Supabase las cajas solo pueden ACTUALIZAR `nombre` y `configuracion` (permisos
+   por columna) y no pueden crear filas: así un bar no puede tocar activo, plan ni fecha_vencimiento. La fila la crea el
+   SuperAdmin (admin_create_negocio). Antes se usaba upsert con todas las columnas y Supabase lo rechazaba siempre (403). */
+async function actualizarNegocio(sb, payload) {
+  const { data, error } = await sb.from("negocios")
+    .update({ nombre: payload.nombre, configuracion: payload.configuracion })
+    .eq("id", String(payload.id))
+    .select("id");
+  if (error) return { error };
+  if (!Array.isArray(data) || data.length === 0) return { error: { message: "El negocio no existe en Supabase o esta caja no tiene permiso sobre él." } };
+  return { error: null };
 }
 
 function sanitizeNegocio(profile, bId) {
@@ -827,7 +840,7 @@ async function syncOrders(options = {}) {
       updated_at: new Date().toISOString()
     };
 
-    const { error: negErr } = await sb.from("negocios").upsert(businessPayload, { onConflict: "id" });
+    const { error: negErr } = await actualizarNegocio(sb, businessPayload);
     if (negErr) {
       console.warn("[NexoSync] ⚠️ Error sincronizando comandas en negocios:", negErr.message);
     } else {
@@ -1064,7 +1077,7 @@ async function syncCashShift(shift, closedData = null) {
       updated_at: new Date().toISOString()
     };
 
-    const { error: negErr } = await sb.from("negocios").upsert(businessPayload, { onConflict: "id" });
+    const { error: negErr } = await actualizarNegocio(sb, businessPayload);
     if (negErr) {
       console.warn("[NexoSync] ⚠️ Error sincronizando cashShift en negocios:", negErr.message);
     } else {
@@ -1127,8 +1140,13 @@ function toCyrb53Hash(str, seed = 0) {
 }
 
 // Actualizar el PIN de administrador en la memoria local y cache sin alterar el flujo offline
-function applyAdminPinLocally(pin, salt, hash) {
-  if (!pin || typeof state === "undefined" || !state) return;
+// PIN de administrador que llega de la nube (negocios.configuracion). Se aplica con la sal y el hash: el PIN en texto
+// plano solo llega de filas antiguas y ya no se guarda ni se sube. Si el PIN local se cambió después (pinAt), gana el local:
+// antes cada descarga devolvía el PIN de la caja al que hubiera en la nube.
+function applyAdminPinLocally(pin, salt, hash, at = 0) {
+  if (typeof state === "undefined" || !state) return;
+  const cleanPin = pin ? String(pin).trim() : "";
+  if (!cleanPin && !(salt && hash)) return;
   if (!Array.isArray(state.users)) state.users = [];
 
   let admin = state.users.find(u => u.role === "admin");
@@ -1142,19 +1160,18 @@ function applyAdminPinLocally(pin, salt, hash) {
     };
     state.users.push(admin);
   }
+  if (state.profile) { delete state.profile.admin_pin; delete state.profile.adminPin; }
 
-  const cleanPin = String(pin).trim();
+  const remotoAt = Number(at) || 0;
+  if ((Number(admin.pinAt) || 0) > remotoAt) return; // el PIN de esta caja es más reciente que el de la nube
   const s = salt || admin.salt || Math.random().toString(36).slice(2, 10);
-  const h = toCyrb53Hash(`${s}:${cleanPin}`);
+  const h = (salt && hash) ? hash : toCyrb53Hash(`${s}:${cleanPin}`);
+  if (admin.salt === s && admin.pinHash === h && !admin.mustChangePin) return; // sin cambios
 
   admin.salt = s;
   admin.pinHash = h;
   admin.mustChangePin = false;
-
-  if (state.profile) {
-    state.profile.admin_pin = cleanPin;
-    state.profile.adminPin = cleanPin;
-  }
+  if (remotoAt) admin.pinAt = remotoAt;
 
   const pinDlg = typeof document !== "undefined" ? document.querySelector("#pinDialog") : null;
   if (pinDlg && pinDlg.open && typeof forcedPinChange !== "undefined" && !forcedPinChange) {
@@ -1168,13 +1185,15 @@ function applyAdminPinLocally(pin, salt, hash) {
   if (typeof scheduleSave === "function") scheduleSave();
 }
 
-// Sincronización del PIN de Administrador con Supabase (negocios.configuracion.admin_pin)
+// Sincronización del PIN de Administrador con Supabase (negocios.configuracion: admin_salt, admin_hash, admin_pin_at)
 async function syncAdminPin(pin, user) {
   const cleanPin = String(pin || "").trim();
   const u = user || ((typeof state !== "undefined" && Array.isArray(state.users)) ? state.users.find(x => x.role === "admin") : null);
   const salt = u?.salt || Math.random().toString(36).slice(2, 10);
   const hash = toCyrb53Hash(`${salt}:${cleanPin}`);
-  applyAdminPinLocally(cleanPin, salt, hash);
+  // setUserPin (modules.js) normalmente ya lo dejó aplicado; si no, se aplica aquí con la fecha del cambio
+  if (!u || u.pinHash !== hash || u.salt !== salt) applyAdminPinLocally(cleanPin, salt, hash, Date.now());
+  else if (!(Number(u.pinAt) > 0)) u.pinAt = Date.now(); // syncAdminPin solo se llama justo después de cambiar el PIN
   if (isDemoMode()) {
     console.log("[NexoSync] 🧪 Modo Demo: PIN actualizado solo localmente.");
     return { ok: true, demo: true, pin: cleanPin };
@@ -1189,11 +1208,7 @@ async function syncAdminPin(pin, user) {
     // configuracionNegocio: en el modo anterior conserva los pedidos actuales (antes esta escritura los borraba de la
     // nube y las otras cajas daban por cobradas sus mesas); en modo tabla no los incluye
     const updatedConfig = {
-      ...configuracionNegocio(prof, { cashShift: currentShift }),
-      admin_pin: cleanPin,
-      adminPin: cleanPin,
-      admin_salt: salt,
-      admin_hash: hash,
+      ...configuracionNegocio(prof, { cashShift: currentShift }), // ya lleva admin_salt, admin_hash y admin_pin_at
       mustChangePin: false,
       cashShift: currentShift
     };
@@ -1206,19 +1221,8 @@ async function syncAdminPin(pin, user) {
       updated_at: new Date().toISOString()
     };
 
-    // 1. Intentar persistir con columna opcional 'admin_pin' en la tabla negocios
-    try {
-      const { error: colErr } = await sb.from("negocios").upsert({ ...businessPayload, admin_pin: cleanPin }, { onConflict: "id" });
-      if (!colErr) {
-        console.log("[NexoSync] ✅ PIN de admin sincronizado en columna 'admin_pin' de Supabase.");
-        return { ok: true, pin: cleanPin };
-      }
-    } catch (e) {
-      /* ignore si la columna directa no existe */
-    }
-
     // 2. Persistir en la columna JSONB 'configuracion' (siempre compatible)
-    const { error: negErr } = await sb.from("negocios").upsert(businessPayload, { onConflict: "id" });
+    const { error: negErr } = await actualizarNegocio(sb, businessPayload);
     if (negErr) {
       console.warn("[NexoSync] ⚠️ Error sincronizando admin_pin en negocios:", negErr.message);
       return { ok: false, error: negErr.message };
@@ -1375,7 +1379,7 @@ async function syncAll(options = {}) {
   try {
     if (typeof state !== "undefined" && state?.profile && (options.force || state.profile.sync_status === "pending" || !state.profile.sync_status)) {
       const payload = sanitizeNegocio(state.profile, bId);
-      const { error: profErr } = await sb.from("negocios").upsert(payload, { onConflict: "id" });
+      const { error: profErr } = await actualizarNegocio(sb, payload);
       if (profErr) {
         console.warn("[NexoSync] ⚠️ Negocios:", profErr.message);
         results.negocios = { ok: false, error: profErr.message };
@@ -1594,13 +1598,10 @@ async function pullAllFromSupabase(businessId) {
           }
 
           // Centralización y descarga del PIN de Administrador desde Supabase
-          const remotePin = negData.admin_pin || negData.configuracion?.admin_pin || negData.configuracion?.adminPin;
-          if (remotePin) {
-            applyAdminPinLocally(
-              remotePin,
-              negData.configuracion?.admin_salt,
-              negData.configuracion?.admin_hash
-            );
+          const cfgPin = negData.configuracion || {};
+          const remotePin = negData.admin_pin || cfgPin.admin_pin || cfgPin.adminPin; // solo filas antiguas
+          if (remotePin || (cfgPin.admin_salt && cfgPin.admin_hash)) {
+            applyAdminPinLocally(remotePin, cfgPin.admin_salt, cfgPin.admin_hash, cfgPin.admin_pin_at);
           }
 
           results.negocios = 1;
@@ -2000,19 +2001,8 @@ function setupRealtime() {
                 sync_status: "synced"
               });
 
-              // Descontar inmediatamente en el inventario local los productos vendidos
-              if (Array.isArray(sale.items) && Array.isArray(state.products)) {
-                sale.items.forEach(it => {
-                  const pid = it.productId || it.id;
-                  const p = state.products.find(prod => prod.id === pid);
-                  if (p) {
-                    const qty = Number(it.qty || 1);
-                    p.stock = Math.max(0, Number((Number(p.stock ?? 0) - qty).toFixed(2)));
-                    const inv = state.inventory?.find(i => i.id === p.inventoryId || i.id === `stock-${p.id}`);
-                    if (inv) inv.qty = p.stock;
-                  }
-                });
-              }
+              // El stock no se descuenta aquí: la caja que vendió sube el stock final de cada producto y llega en el evento
+              // de productos (descontar también aquí lo restaba dos veces si ese evento llegaba primero)
 
               if (typeof scheduleSave === "function") scheduleSave();
               if (typeof renderAll === "function") renderAll();
@@ -2099,13 +2089,10 @@ function setupRealtime() {
             if (row.telefono && state.profile) state.profile.phone = row.telefono;
 
             // Sincronización en vivo del PIN de administración
-            const newAdminPin = row.admin_pin || row.configuracion?.admin_pin || row.configuracion?.adminPin;
-            if (newAdminPin) {
-              applyAdminPinLocally(
-                newAdminPin,
-                row.configuracion?.admin_salt,
-                row.configuracion?.admin_hash
-              );
+            const cfgPin = row.configuracion || {};
+            const newAdminPin = row.admin_pin || cfgPin.admin_pin || cfgPin.adminPin; // solo filas antiguas
+            if (newAdminPin || (cfgPin.admin_salt && cfgPin.admin_hash)) {
+              applyAdminPinLocally(newAdminPin, cfgPin.admin_salt, cfgPin.admin_hash, cfgPin.admin_pin_at);
             }
 
             const remoteShift = row.configuracion?.cashShift;
@@ -2358,13 +2345,8 @@ function init() {
   setTimeout(async () => {
     const ok = await checkInitialConnection();
     if (ok) {
-      if (typeof state !== "undefined" && state) {
-        const localAdmin = state.users?.find(u => u.role === "admin");
-        const pinToSync = state.profile?.admin_pin || state.profile?.adminPin || (localAdmin && !localAdmin.mustChangePin && toCyrb53Hash(`${localAdmin.salt}:2013`) === localAdmin.pinHash ? "2013" : "");
-        if (localAdmin && !localAdmin.mustChangePin && pinToSync) {
-          syncAdminPin(pinToSync, localAdmin).catch(() => {});
-        }
-      }
+      // (Ya no se sube el PIN al arrancar: reescribía la configuración de la nube con la de esta caja antes de descargar
+      // los cambios de las demás. El PIN se sube al cambiarlo, en syncAdminPin.)
       if (countPendingRecords() > 0) {
         await syncAll();
       }

@@ -37,6 +37,8 @@ const mockWindow = {
         key,
         from: (table) => ({
           upsert: async (rows) => ({ data: rows, error: null }),
+          // negocios se actualiza (no upsert): devuelve la fila existente, como Supabase
+          update: (fields) => ({ eq: (col, val) => ({ select: async () => ({ data: [{ [col]: val, ...fields }], error: null }) }) }),
           select: () => ({
             eq: () => ({
               order: () => ({ limit: async () => ({ data: [], error: null }) }),
