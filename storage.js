@@ -15,20 +15,52 @@ globalThis.getDbName = getDbName;
 const DB_STORE = 'kv', DB_KEY = 'state', LEGACY_KEY = 'brasa-pos-v1', DEMO_FALLBACK_KEY = 'nexobar_demo_state';
 const BACKUP_DEFAULTS = { onClose: true, daily: true, lastAt: null, lastReason: '', lastFile: '', lastWhere: '' };
 globalThis.BACKUP_DEFAULTS = BACKUP_DEFAULTS;
-let storageReady = false, storageMode = 'indexeddb', storageDb = null;
+let storageReady = false, storageMode = 'indexeddb', storageDb = null, storageOpening = null;
 let saveTimer = null, mirrorTimer = null, saveChain = Promise.resolve(), lastSaveErrorToast = 0, storageInfoAt = 0;
 const storageStatus = { lastSavedAt: null, error: null, migrated: false, restoredFromFile: false };
 
-/* ---------- IndexedDB ---------- */
-function idbOpen() {
+/* ---------- IndexedDB ----------
+   Una sola conexión por pestaña (storageDb) y una sola apertura en curso (storageOpening). Safari iOS congela la
+   página en el BFCache al pasar entre la app y el Modo Demo con «Atrás»: la conexión vieja queda huérfana y sus
+   transacciones se cancelan («Transacción cancelada»). Por eso la conexión se suelta al ocultar la página o si otra
+   pestaña la necesita, y cada operación la reabre y reintenta una vez si la encuentra muerta. */
+function closeStorageDb() {
+  const db = storageDb; storageDb = null;
+  try { db?.close?.(); } catch { /* ya estaba cerrada */ }
+}
+const IDB_OPEN_TIMEOUT = 6000; // Safari iOS a veces deja indexedDB.open sin respuesta: se corta y se reintenta
+function idbOpenOnce() {
   return new Promise((resolve, reject) => {
     if (!('indexedDB' in globalThis)) return reject(new Error('Este navegador no tiene IndexedDB.'));
+    let settled = false;
+    const timer = setTimeout(() => { settled = true; reject(new Error('La base de datos no respondió.')); }, IDB_OPEN_TIMEOUT);
     const request = indexedDB.open(getDbName(), 1);
     request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(DB_STORE)) request.result.createObjectStore(DB_STORE); };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error('No se pudo abrir la base de datos.'));
-    request.onblocked = () => reject(new Error('La base de datos está bloqueada por otra ventana.'));
+    request.onsuccess = () => {
+      const db = request.result;
+      if (settled) { try { db.close(); } catch { /* sin conexión */ } return; } // llegó tarde: ya se reintentó
+      settled = true; clearTimeout(timer);
+      // Otra pestaña pide una versión nueva: se cede la conexión; la próxima operación abre otra
+      db.onversionchange = () => { db.close(); if (storageDb === db) storageDb = null; };
+      // El navegador la cerró por su cuenta (WebKit lo hace al congelar o descartar la página)
+      db.onclose = () => { if (storageDb === db) storageDb = null; };
+      resolve(db);
+    };
+    request.onerror = () => { if (settled) return; settled = true; clearTimeout(timer); reject(request.error || new Error('No se pudo abrir la base de datos.')); };
+    // Bloqueada por una conexión anterior: se cierra la propia; la petición sigue sola en cuanto se libere
+    request.onblocked = () => closeStorageDb();
   });
+}
+// Singleton: si ya hay una apertura en curso se devuelve la misma promesa; si falla, un reintento limpio
+function idbOpen() {
+  if (storageDb) return Promise.resolve(storageDb);
+  if (!storageOpening) {
+    storageOpening = idbOpenOnce()
+      .catch(() => { closeStorageDb(); return idbOpenOnce(); })
+      .then(db => { storageDb = db; return db; })
+      .finally(() => { storageOpening = null; });
+  }
+  return storageOpening;
 }
 function idbRequest(db, mode, action) {
   return new Promise((resolve, reject) => {
@@ -37,8 +69,13 @@ function idbRequest(db, mode, action) {
     tx.oncomplete = () => resolve(result); tx.onerror = tx.onabort = () => reject(tx.error || new Error('Transacción cancelada.'));
   });
 }
-const idbGet = (db, key) => idbRequest(db, 'readonly', store => store.get(key));
-const idbPut = (db, key, value) => idbRequest(db, 'readwrite', store => store.put(value, key));
+// Con una conexión cerrada o huérfana la transacción falla: se descarta, se abre una nueva y se reintenta una vez
+async function idbRun(mode, action) {
+  try { return await idbRequest(await idbOpen(), mode, action); }
+  catch { closeStorageDb(); return idbRequest(await idbOpen(), mode, action); }
+}
+const idbGet = key => idbRun('readonly', store => store.get(key));
+const idbPut = (key, value) => idbRun('readwrite', store => store.put(value, key));
 function readLegacy() {
   if (isDemoMode()) return null;
   try { const raw = localStorage.getItem(LEGACY_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; }
@@ -48,17 +85,17 @@ globalThis.readLegacy = readLegacy;
 /* Devuelve los datos guardados (o null si es la primera vez). */
 async function storageInit() {
   let saved = null;
-  try { storageDb = await idbOpen(); storageMode = 'indexeddb'; } catch (error) { storageDb = null; storageMode = 'localstorage'; storageStatus.error = String(error.message || error); }
-  if (storageDb) {
-    saved = (await idbGet(storageDb, DB_KEY)) ?? null;
+  try { await idbOpen(); storageMode = 'indexeddb'; } catch (error) { closeStorageDb(); storageMode = 'localstorage'; storageStatus.error = String(error.message || error); }
+  if (storageMode === 'indexeddb') {
+    saved = (await idbGet(DB_KEY)) ?? null;
     if (!isDemoMode()) {
       if (!saved && globalThis.desktop?.loadMirror) { // IndexedDB vacío pero existe el archivo espejo del escritorio
-        try { const raw = await desktop.loadMirror(); if (raw) { saved = JSON.parse(raw); storageStatus.restoredFromFile = true; await idbPut(storageDb, DB_KEY, saved); } } catch { saved = null; }
+        try { const raw = await desktop.loadMirror(); if (raw) { saved = JSON.parse(raw); storageStatus.restoredFromFile = true; await idbPut(DB_KEY, saved); } } catch { saved = null; }
       }
       if (!saved) { // migración desde localStorage (versiones anteriores)
         const legacy = readLegacy();
         if (legacy) {
-          await idbPut(storageDb, DB_KEY, legacy); const check = await idbGet(storageDb, DB_KEY);
+          await idbPut(DB_KEY, legacy); const check = await idbGet(DB_KEY);
           if (check && JSON.stringify(check).length === JSON.stringify(legacy).length) { saved = check; storageStatus.migrated = true; try { localStorage.removeItem(LEGACY_KEY); } catch { /* sin permiso: se deja */ } } else saved = legacy;
         }
       }
@@ -73,7 +110,9 @@ async function storageInit() {
   try { navigator.storage?.persist?.().catch(() => {}); } catch { /* opcional */ }
   if (!isDemoMode() && globalThis.desktop?.onFlushRequest) desktop.onFlushRequest(async () => { await flushAll(); desktop.flushDone(); });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushAll(); });
-  window.addEventListener('pagehide', () => { flushAll(); });
+  // Al salir o entrar al BFCache se guarda y luego se suelta la conexión (cerrarla antes cancelaría el guardado).
+  // Si la página vuelve del BFCache, la siguiente operación abre una conexión nueva.
+  window.addEventListener('pagehide', () => { flushAll().finally(() => { if (storageMode === 'indexeddb') closeStorageDb(); }); });
   return saved;
 }
 
@@ -96,7 +135,7 @@ function scheduleSave() { if (!storageReady) return; clearTimeout(saveTimer); sa
 async function persistNow() {
   try {
     if (storageMode === 'indexeddb') {
-      await idbPut(storageDb, DB_KEY, state);
+      await idbPut(DB_KEY, state);
     } else if (isDemoMode()) {
       sessionStorage.setItem(DEMO_FALLBACK_KEY, JSON.stringify(state));
     } else {

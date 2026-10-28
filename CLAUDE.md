@@ -65,4 +65,4 @@ Al final de `<body>`, todos con `defer` (se ejecutan en este orden al terminar d
 
 ## Pruebas
 
-Scripts de Node en `scratch/test-*.js` (`node scratch/test-demo-mode.js`). Simulan `window`/`document` y cargan los archivos de la app. Problemas conocidos ya existentes: `test-turnos-caja-and-pedidos-activos.js` falla (`paymentTimestamp is not defined` en `modules.js`) y `test-responsive-cards-and-navigation.js` no termina.
+Scripts de Node en `scratch/test-*.js`. `npm test` los corre todos con `node --test` (uno a la vez; cada archivo pasa si termina con código 0); uno solo: `node scratch/test-demo-mode.js`. Simulan `window`/`document` y cargan los archivos de la app. `scratch/audit-*.js` no entran en `npm test`: `audit-security-and-bugs.js` es la auditoría de seguridad (hoy con 2 hallazgos medios conocidos: token de sesión en `localStorage` y contraseña en claro en `admin_create_negocio`, pendientes del sprint de autenticación) y `audit-supabase-schema.js` revisa el esquema.

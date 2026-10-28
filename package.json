@@ -11,7 +11,8 @@
     "electron:start": "electron .",
     "electron:build": "electron-builder --win",
     "dist": "electron-builder --win",
-    "build": "echo Compilación web lista"
+    "build": "echo Compilación web lista",
+    "test": "node --test --test-concurrency=1 \"scratch/test-*.js\""
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",
