@@ -9,15 +9,21 @@
 // Uso:
 //   const { createMockSupabase } = require('./mock-supabase.js');
 //   const sb = createMockSupabase({ businessId: 'nexobar_default', seed: { productos: [...] } });
+//   pedidosConMeta: true simula la migración de pedidos_activos (columna meta). Sin ella, como el esquema actual,
+//   leer o escribir una columna inexistente de pedidos_activos devuelve el error de PostgREST.
 //   global.supabase = { createClient: () => sb };
 
 const clone = value => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 const scopeColumn = table => (table === 'negocios' ? 'id' : 'business_id');
 const denied = table => ({ code: '42501', message: `permission denied for table ${table}`, details: null, hint: null });
+// Columnas conocidas por tabla (solo se valida pedidos_activos, la que cambia con la migración)
+const PEDIDOS_COLS = ['id', 'business_id', 'mesa_id', 'nombre_mesa', 'cliente', 'items', 'subtotal', 'total', 'estado', 'tipo', 'created_at', 'updated_at'];
 const rlsViolation = table => ({ code: '42501', message: `new row violates row-level security policy for table "${table}"`, details: null, hint: null });
 
-function createMockSupabase({ businessId = 'nexobar_default', authenticated = true, seed = {}, rpc = {} } = {}) {
+function createMockSupabase({ businessId = 'nexobar_default', authenticated = true, seed = {}, rpc = {}, pedidosConMeta = false } = {}) {
   const tables = {};
+  const esquema = { pedidos_activos: pedidosConMeta ? [...PEDIDOS_COLS, 'meta'] : PEDIDOS_COLS };
+  const columnaInexistente = (table, cols) => (esquema[table] ? cols.find(c => !esquema[table].includes(c)) : null);
   for (const [name, rows] of Object.entries(seed)) tables[name] = clone(rows);
   const tableRows = name => (tables[name] = tables[name] || []);
 
@@ -28,7 +34,7 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
   const currentBusiness = () => session?.user?.app_metadata?.business_id || null;
 
   function query(table) {
-    const state = { action: 'select', filters: [], order: null, limit: null, single: null, head: false, count: null, returning: false, payload: null, onConflict: 'id' };
+    const state = { action: 'select', filters: [], order: null, limit: null, single: null, head: false, count: null, returning: false, payload: null, onConflict: 'id', columns: '*' };
     const matches = row => state.filters.every(([op, col, val]) => {
       const cell = row[col];
       switch (op) {
@@ -52,6 +58,8 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
 
       if (state.action === 'upsert' || state.action === 'insert') {
         const records = Array.isArray(state.payload) ? state.payload : [state.payload];
+        const falta = columnaInexistente(table, [...new Set(records.flatMap(r => Object.keys(r || {})))]);
+        if (falta) return { data: null, error: { code: 'PGRST204', message: `Could not find the '${falta}' column of '${table}' in the schema cache` }, count: null };
         if (records.some(r => String(r[col]) !== String(bId))) return { data: null, error: rlsViolation(table), count: null };
         const written = records.map(record => {
           const key = state.onConflict;
@@ -76,6 +84,8 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
       }
 
       // select
+      const faltaSel = state.columns === '*' ? null : columnaInexistente(table, state.columns.split(',').map(s => s.trim()));
+      if (faltaSel) return { data: null, error: { code: '42703', message: `column ${table}.${faltaSel} does not exist` }, count: null };
       let result = visible.filter(matches);
       if (state.order) {
         const { col: orderCol, ascending } = state.order;
@@ -94,7 +104,7 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
 
     const builder = {
       select(cols = '*', opts = {}) {
-        if (state.action === 'select') { state.head = Boolean(opts.head); state.count = opts.count || null; } else state.returning = true;
+        if (state.action === 'select') { state.head = Boolean(opts.head); state.count = opts.count || null; state.columns = cols; } else state.returning = true;
         return builder;
       },
       insert(payload) { state.action = 'insert'; state.payload = payload; return builder; },
@@ -118,7 +128,9 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
     return builder;
   }
 
-  const channel = { on() { return channel; }, subscribe(cb) { if (typeof cb === 'function') cb('SUBSCRIBED'); return channel; }, unsubscribe() { return Promise.resolve('ok'); } };
+  // Tiempo real: guarda los manejadores para que las pruebas emitan eventos con __emitir(tabla, evento, payload)
+  const manejadores = [];
+  const channel = { on(_tipo, filtro, cb) { manejadores.push({ filtro: filtro || {}, cb }); return channel; }, subscribe(cb) { if (typeof cb === 'function') cb('SUBSCRIBED'); return channel; }, unsubscribe() { return Promise.resolve('ok'); } };
 
   return {
     from: query,
@@ -134,7 +146,11 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
     },
     // Ayudas solo para pruebas
     __tables: tables,
-    __setSession(bId) { session = bId ? makeSession(bId) : null; }
+    __setSession(bId) { session = bId ? makeSession(bId) : null; },
+    __emitir(table, eventType, payload) {
+      manejadores.filter(m => m.filtro.table === table && (m.filtro.event === '*' || m.filtro.event === eventType)).forEach(m => m.cb({ eventType, ...payload }));
+    },
+    __manejadores: manejadores
   };
 }
 

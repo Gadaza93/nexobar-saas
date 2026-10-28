@@ -368,6 +368,7 @@ function saveInvoiceEdit() {
   payment.payments = tenders; payment.method = tendersMethodLabel(tenders);
   payment.sync_status = 'pending'; // la corrección también se sube a Supabase (monto, productos y desglose)
   payment.editedAt = Date.now(); payment.editedBy = actor().userName; payment.edits = [...(payment.edits || []), { at: payment.editedAt, by: payment.editedBy, reason, before }];
+  globalThis.marcarHistorialModificado?.('payments', payment); // su mes se reescribe en IndexedDB aunque sea antiguo
   logAudit('Factura editada', `${payment.invoiceNo} · ${money.format(before.amount)} → ${money.format(payment.amount)}${before.method !== payment.method ? ` · ${before.method} → ${payment.method}` : ''}`, { reason, data: { before } });
   saveState(); invoiceDraft = null; document.querySelector('#invoiceDialog').close(); renderAll(); showToast(`${payment.invoiceNo} corregida.`);
 }
@@ -431,7 +432,7 @@ function saveSupplier() {
   if (state.suppliers.some(s => s.id !== editingSupplierId && s.name.toLowerCase() === name.toLowerCase())) return showToast('Ya existe un proveedor con ese nombre.');
   const data = { name, nit: document.querySelector('#supplierNit').value.trim(), phone: document.querySelector('#supplierPhone').value.trim(), notes: document.querySelector('#supplierNotes').value.trim() };
   const existing = editingSupplierId && state.suppliers.find(s => s.id === editingSupplierId);
-  if (existing) { Object.assign(existing, data); state.purchases.forEach(p => { if (p.supplierId === existing.id) p.supplier = name; }); } else state.suppliers.push({ id: uid('sup'), ...data });
+  if (existing) { Object.assign(existing, data); state.purchases.forEach(p => { if (p.supplierId === existing.id) { p.supplier = name; globalThis.marcarHistorialModificado?.('purchases', p); } }); } else state.suppliers.push({ id: uid('sup'), ...data });
   saveState(); document.querySelector('#supplierDialog').close(); renderAll(); showToast('Proveedor guardado.');
 }
 function deleteSupplier(id) {

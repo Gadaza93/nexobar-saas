@@ -144,27 +144,28 @@ const mockCloudData = {
   ]
 };
 
-// Supabase Mock
+// Supabase Mock: consulta encadenable como supabase-js (select/eq/gt/in/order/limit/maybeSingle/then)
 const mockSupabase = {
   from(table) {
-    let filterCol = null, filterVal = null;
     return {
-      select() {
-        return {
-          eq(col, val) {
-            filterCol = col;
-            filterVal = val;
-            const records = (mockCloudData[table] || []).filter(r => {
-              if (col === 'id') return r.id === val;
-              if (col === 'business_id') return r.business_id === val;
-              return true;
-            });
-            return {
-              maybeSingle: () => Promise.resolve({ data: records[0] || null, error: null }),
-              then: (resolve) => resolve({ data: records, error: null })
-            };
-          }
+      select(columns = '*') {
+        const filters = []; let orderCol = null, max = Infinity;
+        const run = () => {
+          let rows = (mockCloudData[table] || []).filter(r => filters.every(f => f(r)));
+          if (orderCol) rows = [...rows].sort((a, b) => String(a[orderCol]).localeCompare(String(b[orderCol])));
+          rows = rows.slice(0, max);
+          return columns === '*' ? rows : rows.map(r => Object.fromEntries(columns.split(',').map(c => [c, r[c]])));
         };
+        const q = {
+          eq(col, val) { filters.push(r => r[col] === val); return q; },
+          gt(col, val) { filters.push(r => String(r[col]) > String(val)); return q; },
+          in(col, vals) { filters.push(r => vals.includes(r[col])); return q; },
+          order(col) { orderCol = col; return q; },
+          limit(n) { max = n; return q; },
+          maybeSingle: () => Promise.resolve({ data: run()[0] || null, error: null }),
+          then: (resolve, reject) => Promise.resolve({ data: run(), error: null }).then(resolve, reject)
+        };
+        return q;
       },
       upsert(records) {
         return Promise.resolve({ data: records, error: null });

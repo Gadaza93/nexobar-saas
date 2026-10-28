@@ -345,23 +345,31 @@ function sanitizeMerma(l, bId) {
   };
 }
 
+/* ---------- Configuración del negocio (negocios.configuracion) ----------
+   Una sola construcción para perfil, turno de caja y datos del PIN de administrador (antes el turno de caja la
+   reescribía sin el PIN). Los pedidos solo se incluyen en el modo anterior: con la tabla de pedidos
+   (usaTablaPedidos) cada pedido viaja en su propia fila y esta fila deja de reescribirse con cada comanda. */
+function configuracionNegocio(prof, { orders, cashShift } = {}) {
+  const { orders: _pedidosAnteriores, ...perfil } = prof || {}; // un perfil antiguo puede traer pedidos de una descarga
+  const admin = (typeof state !== "undefined" && Array.isArray(state?.users)) ? state.users.find(u => u.role === "admin") : null;
+  const adminPin = perfil.admin_pin || perfil.adminPin || (admin && !admin.mustChangePin && toCyrb53Hash(`${admin.salt}:2013`) === admin.pinHash ? "2013" : "");
+  const pedidos = orders || ((typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : []);
+  return {
+    ...perfil,
+    ...(ordersTableMode === true ? {} : { orders: pedidos }),
+    cashShift: cashShift || ((typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" }),
+    ...(adminPin ? { admin_pin: adminPin, adminPin: adminPin } : {}),
+    ...(admin ? { admin_salt: admin.salt, admin_hash: admin.pinHash, mustChangePin: Boolean(admin.mustChangePin) } : {})
+  };
+}
+
 function sanitizeNegocio(profile, bId) {
   const prof = profile || {};
-  const admin = (typeof state !== "undefined" && Array.isArray(state.users)) ? state.users.find(u => u.role === "admin") : null;
-  const adminPin = prof.admin_pin || prof.adminPin || (admin && !admin.mustChangePin && toCyrb53Hash(`${admin.salt}:2013`) === admin.pinHash ? "2013" : "");
-  const currentOrders = (typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : [];
-
   return {
     id: String(bId || DEFAULT_BUSINESS_ID),
     nombre: prof.name || prof.nombre || "NexoBar",
     telefono: prof.phone || prof.ownerPhone || prof.telefono || "",
-    configuracion: {
-      ...prof,
-      orders: currentOrders,
-      cashShift: (typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" },
-      ...(adminPin ? { admin_pin: adminPin, adminPin: adminPin } : {}),
-      ...(admin ? { admin_salt: admin.salt, admin_hash: admin.pinHash, mustChangePin: Boolean(admin.mustChangePin) } : {})
-    },
+    configuracion: configuracionNegocio(prof),
     created_at: toIsoDate(prof.createdAt || prof.created_at || Date.now()),
     updated_at: toIsoDate(prof.updatedAt || prof.updated_at || Date.now())
   };
@@ -690,6 +698,96 @@ async function syncSale(sale) {
   }
 }
 
+/* ---------- Pedidos en su propia tabla (pedidos_activos) ----------
+   Modo anterior: cada cambio de una comanda reescribía la fila completa de negocios (perfil, logo, plano, turno y todos
+   los pedidos) y el tiempo real la reenviaba entera a cada caja. Con la migración de Supabase (columna meta en
+   pedidos_activos y la tabla en la publicación de tiempo real; ver CLAUDE.md) cada pedido viaja como su propia fila.
+   Se detecta sola: si la columna meta no existe, todo sigue como antes. */
+let ordersTableMode = null; // null = sin comprobar · true = tabla de pedidos · false = modo anterior
+
+async function usaTablaPedidos(sb) {
+  if (ordersTableMode !== null || !sb) return ordersTableMode === true;
+  try {
+    const { error } = await sb.from("pedidos_activos").select("id,meta").limit(1);
+    if (!error) ordersTableMode = true;
+    else if (/meta|column|relation|does not exist|schema cache/i.test(error.message || "")) ordersTableMode = false;
+    // Otro error (p. ej. sin red): no se decide todavía; esta vez se usa el modo anterior
+  } catch (e) {
+    ordersTableMode = false; // cliente sin soporte de la consulta
+  }
+  return ordersTableMode === true;
+}
+
+const isClosedStatus = o => ["paid", "closed", "cerrada", "cancelada"].includes(String(o?.status || "").toLowerCase());
+const hasItems = o => Array.isArray(o?.items) && o.items.some(i => (Number(i.qty) || 0) > 0);
+
+// Pedido → fila de pedidos_activos. meta lleva el pedido completo (nota, abonos, cobro en partes, cliente…)
+function pedidoAFila(o, bId) {
+  const { sync_status: _estadoSync, items, ...meta } = o;
+  const total = Number((items || []).reduce((s, i) => s + (Number(i.price || 0) * Number(i.qty || 1)), 0) || 0);
+  return {
+    id: toValidUuid(o.id),
+    business_id: String(bId || DEFAULT_BUSINESS_ID),
+    mesa_id: String(o.tableId || "walkin"),
+    nombre_mesa: String(o.tableName || (o.tableId === "walkin" ? "Venta en barra" : "Mesa")),
+    cliente: String(o.customer || (o.isCustom ? o.tableName : "") || ""),
+    items: Array.isArray(items) ? items : [],
+    subtotal: total,
+    total,
+    estado: "abierto",
+    tipo: o.isCustom ? "personalizada" : (o.tableId === "walkin" ? "barra" : "mesa"),
+    meta,
+    created_at: toIsoDate(o.createdAt || Date.now()),
+    updated_at: new Date().toISOString()
+  };
+}
+
+// Fila de pedidos_activos → pedido. Las filas sin meta (escritas por versiones anteriores) se reconstruyen igual que antes
+function filaAPedido(row) {
+  const meta = (row?.meta && typeof row.meta === "object") ? row.meta : {};
+  return {
+    ...meta,
+    id: String(meta.id || row.id),
+    tableId: meta.tableId || row.mesa_id || "walkin",
+    tableName: meta.tableName || row.nombre_mesa || (row.tipo === "barra" ? "Venta en barra" : "Mesa"),
+    customer: meta.customer ?? row.cliente ?? "",
+    isCustom: meta.isCustom ?? row.tipo === "personalizada",
+    items: Array.isArray(row.items) ? row.items : [],
+    note: meta.note ?? row.nota ?? "",
+    status: (row.estado === "abierto" || row.estado === "open") ? "open" : "paid",
+    createdAt: meta.createdAt || new Date(row.created_at || Date.now()).getTime(),
+    updatedAt: meta.updatedAt || new Date(row.updated_at || Date.now()).getTime(),
+    sync_status: "synced"
+  };
+}
+
+// Modo tabla: sube solo los pedidos con cambios y borra de la tabla los que ya no están abiertos en esta caja.
+// No toca la fila de negocios.
+async function syncOrdersTabla(sb, bId) {
+  const orders = (typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : [];
+  const pendientes = orders.filter(o => o && o.sync_status !== "synced" && !isClosedStatus(o) && hasItems(o));
+  if (pendientes.length > 0) {
+    const { error } = await sb.from("pedidos_activos").upsert(pendientes.map(o => pedidoAFila(o, bId)), { onConflict: "id" });
+    if (error) {
+      console.warn("[NexoSync] ⚠️ Error sincronizando pedidos en 'pedidos_activos':", error.message);
+      return { ok: false, error: error.message };
+    }
+    pendientes.forEach(o => { o.sync_status = "synced"; });
+  }
+  // Fuera de la tabla: cobrados o cerrados, abiertos que quedaron vacíos y los retirados en esta caja (unidos, eliminados)
+  const retirados = Object.keys((typeof state !== "undefined" && state?.deleted_order_ids && typeof state.deleted_order_ids === "object") ? state.deleted_order_ids : {});
+  const fuera = [...orders.filter(o => o && (isClosedStatus(o) || !hasItems(o))).map(o => o.id), ...retirados]
+    .map(id => toValidUuid(id)).filter(Boolean);
+  if (fuera.length > 0) {
+    const unicos = [...new Set(fuera)];
+    for (let i = 0; unicos.length > i; i += PULL_IN_CHUNK) {
+      await sb.from("pedidos_activos").delete().in("id", unicos.slice(i, i + PULL_IN_CHUNK)).eq("business_id", bId);
+    }
+    orders.forEach(o => { if (isClosedStatus(o)) o.sync_status = "synced"; });
+  }
+  return { ok: true, count: pendientes.length, modo: "tabla" };
+}
+
 // Sincronización bidireccional de comandas / pedidos activos con Supabase
 async function syncOrders(options = {}) {
   if (isDemoMode()) {
@@ -708,6 +806,8 @@ async function syncOrders(options = {}) {
   if (!bId) return { ok: false, error: "Negocio no identificado" };
 
   try {
+    if (await usaTablaPedidos(sb)) return await syncOrdersTabla(sb, bId);
+
     const rawOrders = (typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : [];
     const currentOrders = rawOrders.filter(o => {
       if (!o) return false;
@@ -717,21 +817,13 @@ async function syncOrders(options = {}) {
       return Array.isArray(o.items) && o.items.length > 0 && o.items.some(i => (Number(i.qty) || 0) > 0);
     });
     const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
-    const admin = (typeof state !== "undefined" && Array.isArray(state?.users)) ? state.users.find(u => u.role === "admin") : null;
-    const adminPin = prof.admin_pin || prof.adminPin || (admin && !admin.mustChangePin && toCyrb53Hash(`${admin.salt}:2013`) === admin.pinHash ? "2013" : "");
 
-    // 1. Guardar de forma garantizada en negocios.configuracion.orders
+    // 1. Modo anterior: guardar de forma garantizada en negocios.configuracion.orders
     const businessPayload = {
       id: String(bId || DEFAULT_BUSINESS_ID),
       nombre: prof.name || prof.nombre || "NexoBar",
       telefono: prof.phone || prof.ownerPhone || prof.telefono || "",
-      configuracion: {
-        ...prof,
-        orders: currentOrders,
-        cashShift: (typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" },
-        ...(adminPin ? { admin_pin: adminPin, adminPin: adminPin } : {}),
-        ...(admin ? { admin_salt: admin.salt, admin_hash: admin.pinHash, mustChangePin: Boolean(admin.mustChangePin) } : {})
-      },
+      configuracion: configuracionNegocio(prof, { orders: currentOrders }),
       updated_at: new Date().toISOString()
     };
 
@@ -817,8 +909,10 @@ async function deleteActiveOrder(orderId) {
   }
 }
 
-// Fusión inteligente de pedidos remotos sin pisar datos locales
-function mergeRemoteOrders(remoteOrders) {
+// Fusión inteligente de pedidos remotos sin pisar datos locales.
+// completa=true: remoteOrders es la lista entera de pedidos abiertos, y un pedido local sincronizado que no aparece
+// se da por cobrado en otra caja. completa=false: llega un pedido suelto (tiempo real de pedidos_activos).
+function mergeRemoteOrders(remoteOrders, { completa = true } = {}) {
   if (!Array.isArray(remoteOrders) || typeof state === "undefined" || !state) return;
   if (!Array.isArray(state.orders)) state.orders = [];
 
@@ -874,7 +968,7 @@ function mergeRemoteOrders(remoteOrders) {
       if (ro.equalSplit !== undefined) lo.equalSplit = ro.equalSplit; // cobro en partes de otra caja (configuracion.orders lo trae)
       if (ro.updatedAt !== undefined) lo.updatedAt = ro.updatedAt;
       lo.sync_status = "synced";
-    } else {
+    } else if (completa) {
       if (lo.sync_status === "synced" && lo.status !== "paid") {
         lo.status = "paid";
       }
@@ -919,6 +1013,30 @@ function mergeRemoteOrders(remoteOrders) {
   });
 }
 
+// Tiempo real de pedidos_activos: un pedido por evento, en ambos modos (en el modo anterior la lista completa sigue
+// llegando además con negocios)
+function refrescarPedidos() {
+  if (typeof scheduleSave === "function") scheduleSave();
+  if (typeof renderTables === "function") try { renderTables(); } catch (e) { /* ignore */ }
+  if (typeof renderStats === "function") try { renderStats(); } catch (e) { /* ignore */ }
+  if (typeof renderCustomOrders === "function") try { renderCustomOrders(); } catch (e) { /* ignore */ }
+  if (typeof renderAll === "function") try { renderAll(); } catch (e) { /* ignore */ }
+}
+function aplicarPedidoEnVivo(payload) {
+  if (!payload?.new) return;
+  mergeRemoteOrders([filaAPedido(payload.new)], { completa: false });
+  refrescarPedidos();
+}
+// Pedido quitado de la tabla en otra caja (cobrado, unido o vaciado): igual que en la fusión completa, un pedido
+// local ya sincronizado se da por cobrado; uno con cambios sin subir se conserva
+function retirarPedidoEnVivo(id) {
+  if (!id || typeof state === "undefined" || !Array.isArray(state?.orders)) return;
+  const local = state.orders.find(o => String(o.id) === String(id) || toValidUuid(o.id) === String(id));
+  if (!local || local.sync_status !== "synced" || local.status === "paid") return;
+  local.status = "paid";
+  refrescarPedidos();
+}
+
 // Sincronización del estado de apertura / cierre de caja con Supabase (negocios, turnos_caja)
 async function syncCashShift(shift, closedData = null) {
   const currentShift = shift || ((typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" });
@@ -937,16 +1055,12 @@ async function syncCashShift(shift, closedData = null) {
   try {
     // 1. Persistir de forma segura en 'negocios' (configuracion.cashShift JSONB)
     const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
-    const currentOrders = (typeof state !== "undefined" && Array.isArray(state?.orders)) ? state.orders : [];
+    await usaTablaPedidos(sb); // decide si los pedidos van en esta fila (modo anterior) o en pedidos_activos
     const businessPayload = {
       id: String(bId || DEFAULT_BUSINESS_ID),
       nombre: prof.name || prof.nombre || "NexoBar",
       telefono: prof.phone || prof.ownerPhone || prof.telefono || "",
-      configuracion: {
-        ...prof,
-        orders: currentOrders,
-        cashShift: currentShift
-      },
+      configuracion: configuracionNegocio(prof, { cashShift: currentShift }),
       updated_at: new Date().toISOString()
     };
 
@@ -1072,8 +1186,10 @@ async function syncAdminPin(pin, user) {
   try {
     const prof = (typeof state !== "undefined" && state?.profile) ? state.profile : {};
     const currentShift = (typeof state !== "undefined" && state?.cashShift) ? state.cashShift : { status: "closed" };
+    // configuracionNegocio: en el modo anterior conserva los pedidos actuales (antes esta escritura los borraba de la
+    // nube y las otras cajas daban por cobradas sus mesas); en modo tabla no los incluye
     const updatedConfig = {
-      ...prof,
+      ...configuracionNegocio(prof, { cashShift: currentShift }),
       admin_pin: cleanPin,
       adminPin: cleanPin,
       admin_salt: salt,
@@ -1369,6 +1485,48 @@ async function syncAll(options = {}) {
 const syncData = syncAll;
 
 // 5. Descarga e hidratación completa desde Supabase (Initial Pull / Hydration)
+/* ---------- Descarga paginada ----------
+   PostgREST devuelve como máximo 1000 filas por consulta. Sin paginar, una tabla grande llegaba truncada y la
+   limpieza de borrados remotos eliminaba localmente lo que no vino. Se pagina por clave (id mayor que el último
+   recibido), que es estable aunque otra caja inserte filas durante la descarga. */
+const PULL_PAGE_SIZE = 1000;
+const PULL_IN_CHUNK = 150; // ids por consulta .in(): mantiene la URL corta
+
+async function fetchAllRows(sb, table, bId, columns = "*") {
+  const rows = [];
+  let lastId = null;
+  for (;;) {
+    let query = sb.from(table).select(columns).eq("business_id", bId);
+    if (lastId !== null) query = query.gt("id", lastId);
+    const { data, error } = await query.order("id", { ascending: true }).limit(PULL_PAGE_SIZE);
+    if (error || !Array.isArray(data)) return { rows, complete: false, error: error || new Error("Respuesta inválida") };
+    rows.push(...data);
+    if (PULL_PAGE_SIZE > data.length) return { rows, complete: true };
+    lastId = data[data.length - 1].id;
+  }
+}
+
+async function fetchRowsByIds(sb, table, bId, ids) {
+  const rows = [];
+  for (let i = 0; ids.length > i; i += PULL_IN_CHUNK) {
+    const { data, error } = await sb.from(table).select("*").eq("business_id", bId).in("id", ids.slice(i, i + PULL_IN_CHUNK));
+    if (error || !Array.isArray(data)) return { rows, complete: false, error: error || new Error("Respuesta inválida") };
+    rows.push(...data);
+  }
+  return { rows, complete: true };
+}
+
+// Tablas que crecen sin parar (ventas, gastos, mermas): primero solo la lista de ids y después, completas,
+// únicamente las filas que este equipo no tiene. No depende de los relojes de las cajas.
+// remoteIds solo viene si la lista de ids llegó completa: sin ella no se debe borrar nada localmente.
+async function fetchMissingRows(sb, table, bId, knownIds) {
+  const manifest = await fetchAllRows(sb, table, bId, "id");
+  if (!manifest.complete) return { rows: [], remoteIds: null, error: manifest.error };
+  const remoteIds = manifest.rows.map(r => String(r.id));
+  const fetched = await fetchRowsByIds(sb, table, bId, remoteIds.filter(id => !knownIds.has(id)));
+  return { rows: fetched.rows, remoteIds: new Set(remoteIds), error: fetched.error };
+}
+
 async function pullAllFromSupabase(businessId) {
   if (isDemoMode()) {
     console.log("[NexoSync] 🧪 Modo Demo (Sandbox): Descarga omitida para operar 100% con datos locales.");
@@ -1393,23 +1551,27 @@ async function pullAllFromSupabase(businessId) {
     mermas: 0,
     pedidos: 0
   };
+  const st = (typeof state !== "undefined" && state) ? state : null; // en pruebas de Node puede no existir
 
   try {
     // 1. Negocios
     try {
+      const tablaPedidos = await usaTablaPedidos(sb);
       const { data: negData, error: negErr } = await sb.from("negocios").select("*").eq("id", bId).maybeSingle();
       if (!negErr && negData) {
         applySubscriptionStatus(negData);
         if (typeof state !== "undefined" && state) {
           const localFloorPlan = state.profile?.floorPlan; // antes de mezclar: la configuración remota trae su propio floorPlan
+          const { orders: _pedidosEnConfig, ...configSinPedidos } = negData.configuracion || {}; // los pedidos no van al perfil
           state.profile = {
             ...state.profile,
-            ...(negData.configuracion || {}),
+            ...configSinPedidos,
             name: negData.nombre || state.profile?.name || "NexoBar",
             phone: negData.telefono || state.profile?.phone || "",
             syncId: bId,
             sync_status: "synced"
           };
+          delete state.profile.orders; // copia de pedidos que versiones anteriores dejaban en el perfil local
 
           // Plano de mesas: se aplica solo si el remoto es más reciente; si no, se conserva el local
           if (typeof applyRemoteFloorPlan === "function") {
@@ -1424,8 +1586,9 @@ async function pullAllFromSupabase(businessId) {
             }
           }
 
-          // Hidratar comandas / pedidos activos desde la configuración remota
-          if (negData.configuracion && Array.isArray(negData.configuracion.orders)) {
+          // Hidratar comandas / pedidos activos desde la configuración remota (solo en el modo anterior: con la tabla de
+          // pedidos, lo que quede en configuracion.orders es una copia vieja y podría resucitar mesas ya cobradas)
+          if (!tablaPedidos && negData.configuracion && Array.isArray(negData.configuracion.orders)) {
             mergeRemoteOrders(negData.configuracion.orders);
             results.pedidos = negData.configuracion.orders.length;
           }
@@ -1489,19 +1652,7 @@ async function pullAllFromSupabase(businessId) {
       try {
         const { data: actRows, error: actErr } = await sb.from("pedidos_activos").select("*").eq("business_id", bId);
         if (!actErr && Array.isArray(actRows)) {
-          const mappedOrders = actRows.map(row => ({
-            id: String(row.id),
-            tableId: row.mesa_id || "walkin",
-            tableName: row.nombre_mesa || (row.tipo === "barra" ? "Venta en barra" : "Mesa"),
-            customer: row.cliente || "",
-            isCustom: row.tipo === "personalizada",
-            items: Array.isArray(row.items) ? row.items : [],
-            note: row.nota || "",
-            status: (row.estado === "abierto" || row.estado === "open") ? "open" : "paid",
-            createdAt: new Date(row.created_at || Date.now()).getTime(),
-            updatedAt: new Date(row.updated_at || Date.now()).getTime(),
-            sync_status: "synced"
-          }));
+          const mappedOrders = actRows.map(filaAPedido);
           mergeRemoteOrders(mappedOrders);
           results.pedidos = Math.max(Number(results.pedidos || 0), mappedOrders.length);
         }
@@ -1514,8 +1665,10 @@ async function pullAllFromSupabase(businessId) {
 
     // 2. Productos
     try {
-      const { data: prodData, error: prodErr } = await sb.from("productos").select("*").eq("business_id", bId);
-      if (!prodErr && Array.isArray(prodData)) {
+      // Catálogo completo (tabla pequeña), paginado: si no llega entero no se toca, para no borrar productos locales
+      const { rows: prodData, complete: prodComplete, error: prodErr } = await fetchAllRows(sb, "productos", bId);
+      if (prodErr) console.warn("[NexoSync] Error descargando productos:", prodErr.message);
+      if (prodComplete) {
         if (typeof state !== "undefined" && state) {
           if (!Array.isArray(state.products)) state.products = [];
           if (!Array.isArray(state.inventory)) state.inventory = [];
@@ -1604,14 +1757,18 @@ async function pullAllFromSupabase(businessId) {
 
     // 3. Ventas
     try {
-      const { data: salesData, error: salesErr } = await sb.from("ventas").select("*").eq("business_id", bId);
-      if (!salesErr && Array.isArray(salesData)) {
+      if (typeof state !== "undefined" && state && !Array.isArray(state.payments)) state.payments = [];
+      const knownSaleIds = new Set([...(st?.payments || []).map(p => String(p.id)), ...deletedSaleIds.map(String)]);
+      const { rows: salesData, remoteIds: remoteSaleIds, error: salesErr } = await fetchMissingRows(sb, "ventas", bId, knownSaleIds);
+      if (salesErr) console.warn("[NexoSync] Error descargando ventas:", salesErr.message);
+      if (remoteSaleIds) {
         if (typeof state !== "undefined" && state) {
-          if (!Array.isArray(state.payments)) state.payments = [];
-
-          // Eliminar localmente las ventas que fueron borradas en Supabase (si no estan pendientes)
-          const remoteSaleIds = new Set(salesData.map(v => String(v.id)));
+          // Eliminar localmente las ventas que fueron borradas en Supabase (si no estan pendientes).
+          // Solo con la lista de ids completa: una lista parcial borraría ventas que sí existen.
           state.payments = state.payments.filter(p => isPendingSync(p) || remoteSaleIds.has(String(p.id)));
+          state.payments.forEach(p => {
+            if (remoteSaleIds.has(String(p.id))) { p.sync_status = "synced"; p.synced = true; }
+          });
 
           salesData.forEach(v => {
             if (deletedSaleIds.includes(String(v.id))) {
@@ -1643,7 +1800,7 @@ async function pullAllFromSupabase(businessId) {
               });
             }
           });
-          results.ventas = salesData.length;
+          results.ventas = salesData.length; // filas nuevas descargadas (las ya conocidas solo viajan como id)
         }
       }
     } catch (e) {
@@ -1652,8 +1809,10 @@ async function pullAllFromSupabase(businessId) {
 
     // 4. Gastos / Compras
     try {
-      const { data: gastosData, error: gastosErr } = await sb.from("gastos").select("*").eq("business_id", bId);
-      if (!gastosErr && Array.isArray(gastosData) && gastosData.length > 0) {
+      const knownGastoIds = new Set([...(st?.expenses || []), ...(st?.purchases || [])].map(g => String(g.id)));
+      const { rows: gastosData, error: gastosErr } = await fetchMissingRows(sb, "gastos", bId, knownGastoIds);
+      if (gastosErr) console.warn("[NexoSync] Error descargando gastos:", gastosErr.message);
+      if (gastosData.length > 0) {
         if (typeof state !== "undefined" && state) {
           if (!Array.isArray(state.expenses)) state.expenses = [];
           if (!Array.isArray(state.purchases)) state.purchases = [];
@@ -1705,8 +1864,9 @@ async function pullAllFromSupabase(businessId) {
 
     // 5. Proveedores
     try {
-      const { data: provData, error: provErr } = await sb.from("proveedores").select("*").eq("business_id", bId);
-      if (!provErr && Array.isArray(provData) && provData.length > 0) {
+      const { rows: provData, error: provErr } = await fetchAllRows(sb, "proveedores", bId);
+      if (provErr) console.warn("[NexoSync] Error descargando proveedores:", provErr.message);
+      if (provData.length > 0) {
         if (typeof state !== "undefined" && state) {
           if (!Array.isArray(state.suppliers)) state.suppliers = [];
           provData.forEach(s => {
@@ -1744,8 +1904,10 @@ async function pullAllFromSupabase(businessId) {
 
     // 6. Mermas
     try {
-      const { data: mermaData, error: mermaErr } = await sb.from("mermas").select("*").eq("business_id", bId);
-      if (!mermaErr && Array.isArray(mermaData) && mermaData.length > 0) {
+      const knownMermaIds = new Set((st?.stockLog || []).map(l => String(l.id)));
+      const { rows: mermaData, error: mermaErr } = await fetchMissingRows(sb, "mermas", bId, knownMermaIds);
+      if (mermaErr) console.warn("[NexoSync] Error descargando mermas:", mermaErr.message);
+      if (mermaData.length > 0) {
         if (typeof state !== "undefined" && state) {
           if (!Array.isArray(state.stockLog)) state.stockLog = [];
           mermaData.forEach(m => {
@@ -1975,9 +2137,9 @@ function setupRealtime() {
               } catch (e) { /* ignore */ }
             }
 
-            // Sincronización en vivo de comandas y mesas activas
+            // Sincronización en vivo de comandas y mesas activas (modo anterior; con la tabla de pedidos llegan por pedidos_activos)
             const remoteOrders = row.configuracion?.orders;
-            if (Array.isArray(remoteOrders)) {
+            if (ordersTableMode !== true && Array.isArray(remoteOrders)) {
               mergeRemoteOrders(remoteOrders);
               if (typeof scheduleSave === "function") scheduleSave();
               if (typeof renderTables === "function") try { renderTables(); } catch (e) {}
@@ -1987,6 +2149,12 @@ function setupRealtime() {
           }
         }
       })
+      // Pedidos en vivo: cada evento trae un solo pedido. (El manejador anterior lo fusionaba como si fuera la lista
+      // completa y daba por cobradas todas las demás mesas abiertas de esta caja.)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "pedidos_activos", filter: `business_id=eq.${bId}` }, payload => aplicarPedidoEnVivo(payload))
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "pedidos_activos", filter: `business_id=eq.${bId}` }, payload => aplicarPedidoEnVivo(payload))
+      // Supabase no filtra los DELETE: llegan solo con el id (con RLS) y se ignoran si no son de esta caja
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "pedidos_activos" }, payload => retirarPedidoEnVivo(payload?.old?.id))
       .on("postgres_changes", { event: "*", schema: "public", table: "turnos_caja", filter: `business_id=eq.${bId}` }, payload => {
         if (typeof state !== "undefined" && state) {
           if (payload?.eventType === "DELETE" || (!payload?.new && payload?.old)) {
@@ -2008,40 +2176,6 @@ function setupRealtime() {
           if (typeof renderShiftStatus === "function") renderShiftStatus();
           if (typeof renderStats === "function") renderStats();
           if (typeof renderAll === "function") renderAll();
-        }
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "pedidos_activos", filter: `business_id=eq.${bId}` }, payload => {
-        if (typeof state !== "undefined" && state) {
-          if (payload?.eventType === "DELETE" || (!payload?.new && payload?.old?.id)) {
-            const delId = String(payload.old?.id || "");
-            const delUuid = toValidUuid(delId);
-            if (Array.isArray(state.orders)) {
-              state.orders = state.orders.filter(o => {
-                const oUuid = toValidUuid(o.id);
-                return o.id !== delId && oUuid !== delId && o.id !== delUuid && oUuid !== delUuid;
-              });
-            }
-          } else if (payload?.new) {
-            const row = payload.new;
-            mergeRemoteOrders([{
-              id: String(row.id),
-              tableId: row.mesa_id || "walkin",
-              tableName: row.nombre_mesa || (row.tipo === "barra" ? "Venta en barra" : "Mesa"),
-              customer: row.cliente || "",
-              isCustom: row.tipo === "personalizada",
-              items: Array.isArray(row.items) ? row.items : [],
-              note: row.nota || "",
-              status: (row.estado === "abierto" || row.estado === "open") ? "open" : "paid",
-              createdAt: new Date(row.created_at || Date.now()).getTime(),
-              updatedAt: new Date(row.updated_at || Date.now()).getTime(),
-              sync_status: "synced"
-            }]);
-          }
-          if (typeof scheduleSave === "function") scheduleSave();
-          if (typeof renderTables === "function") try { renderTables(); } catch (e) {}
-          if (typeof renderStats === "function") try { renderStats(); } catch (e) {}
-          if (typeof renderCustomOrders === "function") try { renderCustomOrders(); } catch (e) {}
-          if (typeof renderAll === "function") try { renderAll(); } catch (e) {}
         }
       })
       .subscribe();

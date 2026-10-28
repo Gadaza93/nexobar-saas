@@ -13,10 +13,43 @@ POS para bares (antes "Brasa POS"), en español de Colombia (`es-CO`, pesos sin 
 ## Arquitectura offline-first
 
 - **Fuente de verdad local.** El estado completo (`state` en `app.js`) se guarda en **IndexedDB** (`storage.js`, base `brasa-pos`, store `kv`, clave `state`). Migra automáticamente desde `localStorage` (`brasa-pos-v1`) de versiones antiguas. No renombrar la base ni las claves: se perderían datos de clientes existentes.
+- **Historial partido por mes.** En IndexedDB, `state` es solo el núcleo: ventas, gastos y compras van en claves `hist:<colección>:<AAAA-MM>` (`guardarParticionado` / `cargarParticionado` en `storage.js`), escritas en la misma transacción. En memoria `state` sigue completo. Cada guardado escribe el núcleo y los meses recientes; un mes viejo solo si cambia su resumen (cantidad, total, pendientes, ids). Si editas en el lugar un registro antiguo sin cambiar esos datos, llama a `marcarHistorialModificado(colección, registro)`; la revisión completa (cada 10 min y al ocultar o cerrar la app) es solo la red de seguridad. **No instalar versiones anteriores a este cambio**: leerían el núcleo con el historial vacío. Prueba: `scratch/test-storage-particionado.js`.
 - **Archivo espejo (solo Windows).** En Electron, cada guardado se replica en `%APPDATA%\NexoBar\datos\nexobar-pos.json` (escritura atómica + `.bak` horario). Si IndexedDB está vacío, se restaura desde el espejo; `mirror:load` acepta también el antiguo `brasa-pos.json`. Respaldos en `Documentos\NexoBar\Respaldos` (o la carpeta legada `BrasaPOS\Respaldos`).
 - **Sincronización diferida (`sync.js`, objeto global `NexoSync`).** Cada registro lleva `sync_status` (`nuevo_local`/`pending` → `synced`). Se suben en lote a Supabase cuando hay conexión (`scheduleSync`, evento `online`) y se descargan con `pullAllFromSupabase`. Los datos del negocio se separan por `business_id` (por defecto `nexobar_default`).
+- **Descargas siempre paginadas.** PostgREST corta en 1000 filas por consulta: nunca leer una tabla con `select()` sin paginar. Usa `fetchAllRows` (tablas pequeñas: productos, proveedores) o `fetchMissingRows` (tablas que crecen: ventas, gastos, mermas; baja solo ids y luego las filas que faltan). Los borrados remotos se aplican localmente solo si la lista de ids llegó completa. Prueba: `scratch/test-pull-pagination.js`.
+- **Pedidos abiertos: `pedidos_activos`, no `negocios`.** Si la tabla tiene la columna `meta` (migración de Supabase: `alter table pedidos_activos add column meta jsonb` + la tabla en la publicación `supabase_realtime`), `usaTablaPedidos` activa el modo tabla: cada pedido viaja como su fila (el pedido completo en `meta`), solo suben los que tienen cambios y `negocios.configuracion` deja de llevar `orders`. Sin la columna se mantiene el modo anterior (`configuracion.orders`). Toda escritura de `negocios.configuracion` pasa por `configuracionNegocio()`. El tiempo real de `pedidos_activos` trae un pedido por evento: se aplica con `mergeRemoteOrders([...], { completa: false })`, nunca como lista completa. Prueba: `scratch/test-pedidos-tabla.js`.
 - **Nunca bloquear la venta por la red.** Toda operación se completa en local primero; los fallos de Supabase solo cambian el indicador de sincronización.
 - Si `supabase.min.js` no cargó, `getClient()` devuelve `null`, la app trabaja offline y `loadSupabaseLib()` reintenta desde el mismo archivo local.
+
+## Operación de Supabase (se hace en el panel, no en el código)
+
+El esquema no está en el repositorio: estos pasos se aplican a mano en el proyecto de Supabase.
+
+1. **Índices** (SQL Editor; si ya existen no hace nada). Cada página de la descarga paginada es una búsqueda directa:
+   ```sql
+   create index if not exists ventas_negocio_id_idx       on public.ventas (business_id, id);
+   create index if not exists gastos_negocio_id_idx       on public.gastos (business_id, id);
+   create index if not exists mermas_negocio_id_idx       on public.mermas (business_id, id);
+   create index if not exists productos_negocio_id_idx    on public.productos (business_id, id);
+   create index if not exists proveedores_negocio_id_idx  on public.proveedores (business_id, id);
+   create index if not exists pedidos_activos_negocio_idx on public.pedidos_activos (business_id);
+   create index if not exists turnos_caja_negocio_idx     on public.turnos_caja (business_id, estado, created_at desc);
+   ```
+2. **Pedidos en tabla propia** — solo cuando **todas** las cajas tengan la versión con `usaTablaPedidos` (las de Windows necesitan instalador nuevo); activa el modo en todas a la vez:
+   ```sql
+   alter table public.pedidos_activos add column if not exists meta jsonb;
+   do $ begin
+     alter publication supabase_realtime add table public.pedidos_activos;
+   exception when duplicate_object then null; end $;
+   ```
+3. **Plan Pro** antes del primer cliente de pago (Organization → Billing). El plan gratuito pausa el proyecto tras una semana sin uso, tiene 500 MB de base de datos y no incluye copias de seguridad descargables.
+4. **Copias de seguridad**: Pro hace una copia diaria automática (Database → Backups). Para poder volver a un minuto exacto, activar el complemento Point in Time Recovery (costo aparte).
+5. **Alertas de uso**: Organization → Billing → dejar activado el *spend cap* hasta conocer el consumo real, y revisar Reports → Database (tamaño y conexiones) y Usage (transferencia) cada mes. Los avisos de uso llegan al correo de facturación configurado en Organization → Billing.
+6. **Revisión mensual del tamaño** (SQL Editor):
+   ```sql
+   select relname as tabla, pg_size_pretty(pg_total_relation_size(relid)) as tamano, n_live_tup as filas
+   from pg_stat_user_tables order by pg_total_relation_size(relid) desc;
+   ```
 
 ## Compatibilidad dual: PWA + Windows
 
