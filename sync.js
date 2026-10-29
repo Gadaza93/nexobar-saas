@@ -309,6 +309,138 @@ function sanitizeProducto(p, bId) {
   };
 }
 
+/* ---------- Stock por movimientos (movimientos_stock + trigger ventas_stock en Supabase) ----------
+   La nube suma y resta: las ventas las descuenta su trigger y todo lo demás (compras, mermas, ajustes, conteos, ficha
+   del producto, importación, devolver stock al borrar una factura) sube como un movimiento con la diferencia. Cada
+   producto guarda stockSynced: el stock que la nube ya conoce. Lo hecho en esta caja y aún no subido es
+   stock local − stockSynced + lo vendido en ventas sin subir − movimientos sin subir; esa diferencia es el próximo
+   movimiento, así ningún cambio local se pierde aunque la ruta que lo hizo no sepa de la nube. Un producto sin
+   stockSynced (nuevo, o la primera vez en este modo) sube su stock absoluto una sola vez. Sin la tabla (SQL sin
+   aplicar) se usa el modo anterior: el stock absoluto de cada producto. Prueba: scratch/test-stock-movimientos.js */
+let stockMode = null;   // true: movimientos · false: stock absoluto (modo anterior) · null: sin decidir
+let stockUploads = 0;   // subidas de ventas o movimientos en curso: mientras tanto el stock remoto no se aplica
+const roundQty = n => Math.round(Number(n || 0) * 1000) / 1000;
+async function usaStockMovimientos(sb) {
+  if (stockMode !== null || !sb) return stockMode === true;
+  try {
+    const { error } = await sb.from("movimientos_stock").select("id").limit(1);
+    if (!error) stockMode = true;
+    else if (/movimientos_stock|relation|does not exist|schema cache/i.test(error.message || "")) stockMode = false;
+    // Otro error (p. ej. sin red): no se decide todavía
+  } catch (e) {
+    stockMode = false;
+  }
+  return stockMode === true;
+}
+function stockSupply(p) {
+  if (!p || typeof state === "undefined" || !Array.isArray(state?.inventory)) return null;
+  const invId = p.inventoryId || `stock-${p.id}`;
+  return state.inventory.find(i => i.id === invId) || null;
+}
+// Existencias locales: manda el insumo de inventario (el conteo físico y la ficha del producto solo cambian el insumo)
+function localStock(p) {
+  const inv = stockSupply(p), v = Number(inv ? inv.qty : p?.stock);
+  return Number.isFinite(v) ? v : 0;
+}
+function setLocalStock(p, value) {
+  p.stock = value;
+  const inv = stockSupply(p);
+  if (inv) inv.qty = value;
+}
+// Cantidades por producto de unos ítems: misma regla que ventas_cantidades en Supabase (productId o id)
+function stockItemsQty(items) {
+  const out = {};
+  (Array.isArray(items) ? items : []).forEach(it => {
+    const id = it && (it.productId || it.id), q = Number(it?.qty);
+    if (id && Number.isFinite(q) && q) out[String(id)] = roundQty((out[String(id)] || 0) + q);
+  });
+  return out;
+}
+// Lo que la nube aún debe descontar por esta venta. Ventas sin subir de antes de este modo: sus ítems.
+function saleStockEffect(sale) {
+  if (sale?.pendingStock) return sale.pendingStock;
+  return isPendingSync(sale) && !sale?.editedAt ? stockItemsQty(sale.items) : {};
+}
+// Factura editada: suma la diferencia de cantidades (vendido de más → positivo) a lo que la nube debe descontar
+function addSaleStockDelta(sale, productId, soldDelta) {
+  if (!sale || !productId || !soldDelta) return;
+  const pending = { ...saleStockEffect(sale) }, id = String(productId);
+  pending[id] = roundQty((pending[id] || 0) + soldDelta);
+  if (!pending[id]) delete pending[id];
+  sale.pendingStock = pending;
+}
+function pendingSoldByProduct() {
+  const sold = new Map();
+  ((typeof state !== "undefined" && state?.payments) || []).forEach(s => {
+    if (!isPendingSync(s)) return;
+    Object.entries(saleStockEffect(s)).forEach(([id, q]) => sold.set(id, roundQty((sold.get(id) || 0) + q)));
+  });
+  return sold;
+}
+const productById = id => ((typeof state !== "undefined" && state?.products) || []).find(p => String(p.id) === String(id));
+// La venta llegó a la nube: su trigger ya descontó, así que la base del producto baja lo mismo
+function markSaleUploaded(sale) {
+  if (stockMode === true) {
+    Object.entries(saleStockEffect(sale)).forEach(([id, q]) => {
+      const p = productById(id);
+      if (p && Number.isFinite(p.stockSynced)) p.stockSynced = roundQty(p.stockSynced - q);
+    });
+  }
+  delete sale.pendingStock;
+  sale.sync_status = "synced";
+  sale.synced = true;
+}
+// Stock que llega de la nube (descarga o tiempo real). Con base conocida, el local se mueve lo mismo que cambió la
+// nube (conserva lo hecho aquí y aún no subido); sin base, gana la nube como antes.
+function remoteStock(p, cloud) {
+  if (!p || !(stockMode === true || Number.isFinite(p.stockSynced))) return cloud;
+  if (stockUploads > 0) return localStock(p); // la nube podría traer ya aplicada la subida en curso: la próxima descarga lo corrige
+  if (!Number.isFinite(p.stockSynced)) { p.stockSynced = cloud; return cloud; }
+  const next = roundQty(localStock(p) + cloud - p.stockSynced);
+  p.stockSynced = cloud;
+  return next;
+}
+function stockMovementsList() {
+  if (!Array.isArray(state.stockMovements)) state.stockMovements = [];
+  return state.stockMovements;
+}
+// Un movimiento por cada producto con cambios locales que la nube aún no tiene
+function recordStockMovements() {
+  const sold = pendingSoldByProduct(), queued = new Map(), list = stockMovementsList();
+  list.forEach(m => queued.set(m.productId, roundQty((queued.get(m.productId) || 0) + m.delta)));
+  (state.products || []).forEach(p => {
+    const id = String(p.id);
+    if (!Number.isFinite(p.stockSynced) || deletedProductIds.includes(id)) return;
+    const delta = roundQty(localStock(p) - p.stockSynced + (sold.get(id) || 0) - (queued.get(id) || 0));
+    if (delta) list.push({ id: `mov-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`, productId: id, delta, motivo: "ajuste", at: Date.now() });
+  });
+}
+// Sube los movimientos pendientes. El id es la llave: un reintento tras una respuesta perdida no suma dos veces
+async function syncStockMovements(sb, bId) {
+  if (typeof state === "undefined" || !state || !(await usaStockMovimientos(sb))) return { ok: true, count: 0 };
+  recordStockMovements();
+  const pending = [...stockMovementsList()];
+  if (!pending.length) return { ok: true, count: 0 };
+  const rows = pending.map(m => ({ id: m.id, business_id: String(bId), producto_id: m.productId, delta: m.delta, motivo: m.motivo || "ajuste", created_at: toIsoDate(m.at) }));
+  stockUploads++;
+  try {
+    const { error } = await sb.from("movimientos_stock").upsert(rows, { onConflict: "id", ignoreDuplicates: true });
+    if (error) {
+      console.warn("[NexoSync] ⚠️ Movimientos de stock:", error.message);
+      return { ok: false, count: rows.length, error: error.message };
+    }
+    pending.forEach(m => { const p = productById(m.productId); if (p && Number.isFinite(p.stockSynced)) p.stockSynced = roundQty(p.stockSynced + m.delta); });
+    state.stockMovements = stockMovementsList().filter(m => !pending.includes(m));
+    if (typeof scheduleSave === "function") scheduleSave();
+    console.log(`[NexoSync] ✅ Movimientos de stock: ${rows.length} subidos.`);
+    return { ok: true, count: rows.length };
+  } catch (err) {
+    return { ok: false, count: rows.length, error: err.message };
+  } finally {
+    stockUploads--;
+  }
+}
+
 function sanitizeVenta(p, bId) {
   const pays = Array.isArray(p.payments) ? p.payments : [];
   const itemsList = Array.isArray(p.items) ? p.items : [];
@@ -449,6 +581,9 @@ function countPendingRecords() {
     }
     if (Array.isArray(state.stockLog)) {
       count += state.stockLog.filter(isPendingSync).length;
+    }
+    if (Array.isArray(state.stockMovements)) {
+      count += state.stockMovements.length;
     }
     if (Array.isArray(state.orders)) {
       count += state.orders.filter(isPendingSync).length;
@@ -682,12 +817,26 @@ async function syncProductos(options = {}) {
     const prods = rawProds.filter(p => options.force || isPendingSync(p));
     if (prods.length > 0) {
       const records = prods.map(p => sanitizeProducto(p, bId));
-      const { error: prodErr } = await sb.from("productos").upsert(records, { onConflict: "id" });
-      if (prodErr) {
-        console.warn("[NexoSync] ⚠️ Productos:", prodErr.message);
-        return { ok: false, count: prods.length, error: prodErr.message };
+      // Modo movimientos: sin base, el stock va absoluto (más lo vendido en ventas sin subir, que su trigger descontará);
+      // con base, no viaja (lo cambian los movimientos). Dos lotes: un upsert no puede omitir la columna solo en algunas filas.
+      const deltas = await usaStockMovimientos(sb);
+      const firstStock = new Map();
+      if (deltas) {
+        const sold = pendingSoldByProduct();
+        prods.forEach((p, i) => {
+          if (Number.isFinite(p.stockSynced)) delete records[i].stock;
+          else { records[i].stock = roundQty(localStock(p) + (sold.get(String(p.id)) || 0)); firstStock.set(p, records[i].stock); }
+        });
       }
-      prods.forEach(p => { p.sync_status = "synced"; });
+      const batches = deltas ? [records.filter(r => "stock" in r), records.filter(r => !("stock" in r))] : [records];
+      for (const batch of batches.filter(b => b.length)) {
+        const { error: prodErr } = await sb.from("productos").upsert(batch, { onConflict: "id" });
+        if (prodErr) {
+          console.warn("[NexoSync] ⚠️ Productos:", prodErr.message);
+          return { ok: false, count: prods.length, error: prodErr.message };
+        }
+      }
+      prods.forEach(p => { p.sync_status = "synced"; if (firstStock.has(p)) p.stockSynced = firstStock.get(p); });
       console.log(`[NexoSync] ✅ Productos: ${records.length} sincronizados.`);
       return { ok: true, count: records.length };
     }
@@ -713,17 +862,19 @@ async function syncSale(sale) {
   if (!sb || !sale) return { ok: false, error: "Cliente no inicializado o venta vacía" };
   const bId = getBusinessId();
   try {
+    const deltas = await usaStockMovimientos(sb);
     const saleRecord = sanitizeVenta(sale, bId);
-    const { error: saleErr } = await sb.from("ventas").upsert(saleRecord, { onConflict: "id" });
+    stockUploads++;
+    let saleErr;
+    try { ({ error: saleErr } = await sb.from("ventas").upsert(saleRecord, { onConflict: "id" })); } finally { stockUploads--; }
     if (saleErr) {
       console.error(`[NexoSync] ❌ Error exacto al subir venta '${sale.id}':`, saleErr.message || saleErr, saleRecord);
       return { ok: false, error: saleErr.message };
     }
-    sale.sync_status = "synced";
-    sale.synced = true;
+    markSaleUploaded(sale);
 
-    // Actualizar de inmediato en Supabase el stock de los productos vendidos
-    if (Array.isArray(sale.items) && sale.items.length > 0 && typeof state !== "undefined" && Array.isArray(state.products)) {
+    // Modo anterior: subir de inmediato el stock absoluto de los productos vendidos (en modo movimientos lo descuenta el trigger)
+    if (!deltas && Array.isArray(sale.items) && sale.items.length > 0 && typeof state !== "undefined" && Array.isArray(state.products)) {
       const pIds = new Set();
       sale.items.forEach(it => {
         const id = it.productId || it.id;
@@ -1310,15 +1461,15 @@ async function syncSales(options = {}) {
     if (sales.length > 0) {
       console.log(`[NexoSync] 📤 Subiendo ${sales.length} ventas locales hacia Supabase...`);
       const records = sales.map(p => sanitizeVenta(p, bId));
+      const deltas = await usaStockMovimientos(sb);
+      stockUploads++;
+      try {
 
       // Intento por lote primero
       const { error: saleErr } = await sb.from("ventas").upsert(records, { onConflict: "id" });
 
       if (!saleErr) {
-        sales.forEach(p => {
-          p.sync_status = "synced";
-          p.synced = true;
-        });
+        sales.forEach(markSaleUploaded);
         console.log(`[NexoSync] ✅ Ventas: ${records.length} sincronizadas por lote.`);
       } else {
         console.warn("[NexoSync] ⚠️ Error en subida por lote de ventas:", saleErr.message || saleErr);
@@ -1336,8 +1487,7 @@ async function syncSales(options = {}) {
               console.error(`[NexoSync] ❌ Error exacto al subir venta ID '${saleItem.id}':`, singleErr.message || singleErr, singleRecord);
               failCount++;
             } else {
-              saleItem.sync_status = "synced";
-              saleItem.synced = true;
+              markSaleUploaded(saleItem);
               successCount++;
             }
           } catch (ex) {
@@ -1352,7 +1502,11 @@ async function syncSales(options = {}) {
         }
       }
 
-      // Actualizar stock en Supabase de los productos incluidos en las ventas sincronizadas
+      } finally {
+        stockUploads--;
+      }
+
+      // Modo anterior: subir el stock absoluto de los productos incluidos en las ventas sincronizadas
       const affectedProductIds = new Set();
       sales.forEach(s => {
         if (s.sync_status === "synced" && Array.isArray(s.items)) {
@@ -1363,7 +1517,7 @@ async function syncSales(options = {}) {
         }
       });
 
-      if (affectedProductIds.size > 0 && typeof state !== "undefined" && Array.isArray(state.products)) {
+      if (!deltas && affectedProductIds.size > 0 && typeof state !== "undefined" && Array.isArray(state.products)) {
         const prodsToUpsert = state.products.filter(p => affectedProductIds.has(String(p.id)));
         if (prodsToUpsert.length > 0) {
           const prodRecords = prodsToUpsert.map(p => sanitizeProducto(p, bId));
@@ -1441,6 +1595,9 @@ async function syncAll(options = {}) {
 
   // --- 3. VENTAS (syncSales / pushSales) ---
   results.ventas = await syncSales(options);
+
+  // --- 3b. MOVIMIENTOS DE STOCK (compras, mermas, ajustes, conteos…: la diferencia que la nube aún no tiene) ---
+  results.stock = await syncStockMovements(sb, bId);
 
   // --- 4. GASTOS / COMPRAS ---
   try {
@@ -1601,6 +1758,7 @@ async function pullAllFromSupabase(businessId) {
     // 1. Negocios
     try {
       const tablaPedidos = await usaTablaPedidos(sb);
+      await usaStockMovimientos(sb); // antes de mezclar el stock de los productos
       const { data: negData, error: negErr } = await sb.from("negocios").select("*").eq("id", bId).maybeSingle();
       if (!negErr && negData) {
         applySubscriptionStatus(negData);
@@ -1738,9 +1896,10 @@ async function pullAllFromSupabase(businessId) {
             if (deletedProductIds.includes(String(p.id))) {
               return; // Ignorar producto eliminado localmente
             }
-            const currentStock = Number(p.stock ?? 0);
+            const cloudStock = Number(p.stock ?? 0);
             const invId = `stock-${p.id}`;
             const existingProd = state.products.find(x => x.id === p.id);
+            const currentStock = existingProd ? remoteStock(existingProd, cloudStock) : cloudStock;
 
             if (existingProd) {
               existingProd.name = p.nombre || existingProd.name;
@@ -1767,12 +1926,13 @@ async function pullAllFromSupabase(businessId) {
                 createdAt: toIsoDate(p.created_at),
                 created_at: toIsoDate(p.created_at),
                 updated_at: toIsoDate(p.updated_at),
+                ...(stockMode === true ? { stockSynced: cloudStock } : {}),
                 sync_status: "synced"
               });
             }
 
             // Sincronizar insumo de inventario local correspondiente
-            let invItem = state.inventory.find(i => i.id === invId || i.id === existingProd?.inventoryId);
+            let invItem = state.inventory.find(i => i.id === (existingProd?.inventoryId || invId)) || state.inventory.find(i => i.id === invId);
             if (invItem) {
               invItem.name = p.nombre || invItem.name;
               invItem.qty = currentStock;
@@ -2071,7 +2231,8 @@ function setupRealtime() {
           const p = payload.new;
           if (typeof state !== "undefined" && Array.isArray(state.products)) {
             const existing = state.products.find(x => x.id === p.id);
-            const currentStock = Number(p.stock ?? 0);
+            const cloudStock = Number(p.stock ?? 0);
+            const currentStock = existing ? remoteStock(existing, cloudStock) : cloudStock;
             const invId = `stock-${p.id}`;
 
             if (existing) {
@@ -2099,12 +2260,13 @@ function setupRealtime() {
                 createdAt: toIsoDate(p.created_at),
                 created_at: toIsoDate(p.created_at),
                 updated_at: toIsoDate(p.updated_at),
+                ...(stockMode === true ? { stockSynced: cloudStock } : {}),
                 sync_status: "synced"
               });
             }
 
             if (Array.isArray(state.inventory)) {
-              let invItem = state.inventory.find(i => i.id === invId || i.id === existing?.inventoryId);
+              let invItem = state.inventory.find(i => i.id === (existing?.inventoryId || invId)) || state.inventory.find(i => i.id === invId);
               if (invItem) {
                 invItem.name = p.nombre || invItem.name;
                 invItem.qty = currentStock;
@@ -2459,6 +2621,10 @@ rootScope.NexoSync = {
   getBusinessId,
   getStatus: () => ({ ...syncState }),
   getPendingCount: countPendingRecords,
+  stockItemsQty,
+  addSaleStockDelta,
+  syncStockMovements,
+  remoteStock,
   SUPABASE_URL,
   SUPABASE_KEY: SUPABASE_ANON_KEY,
   SUPABASE_ANON_KEY

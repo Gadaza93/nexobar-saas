@@ -11,6 +11,8 @@
 //   const sb = createMockSupabase({ businessId: 'nexobar_default', seed: { productos: [...] } });
 //   pedidosConMeta: true simula la migración de pedidos_activos (columna meta). Sin ella, como el esquema actual,
 //   leer o escribir una columna inexistente de pedidos_activos devuelve el error de PostgREST.
+//   stockMovimientos: true simula supabase/sql/2026-10-28_stock_por_movimientos.sql (tabla movimientos_stock y los
+//   triggers ventas_stock y movimientos_stock_aplicar). Sin ella la tabla no existe, como antes de aplicar el SQL.
 //   global.supabase = { createClient: () => sb };
 
 const clone = value => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
@@ -23,7 +25,18 @@ const sinPermiso = table => ({ code: '42501', message: `permission denied for ta
 const PEDIDOS_COLS = ['id', 'business_id', 'mesa_id', 'nombre_mesa', 'cliente', 'items', 'subtotal', 'total', 'estado', 'tipo', 'created_at', 'updated_at'];
 const rlsViolation = table => ({ code: '42501', message: `new row violates row-level security policy for table "${table}"`, details: null, hint: null });
 
-function createMockSupabase({ businessId = 'nexobar_default', authenticated = true, seed = {}, rpc = {}, pedidosConMeta = false } = {}) {
+// Cantidades por producto de los ítems de una venta (igual que ventas_cantidades en SQL: productId o id; qty no numérica = 0)
+function cantidadesVenta(items) {
+  const out = {};
+  (Array.isArray(items) ? items : []).forEach(it => {
+    const id = it && (it.productId ?? it.id);
+    const q = typeof it?.qty === 'number' ? it.qty : /^-?[0-9]+(\.[0-9]+)?$/.test(String(it?.qty)) ? Number(it.qty) : 0;
+    if (id != null) out[id] = (out[id] || 0) + q;
+  });
+  return out;
+}
+
+function createMockSupabase({ businessId = 'nexobar_default', authenticated = true, seed = {}, rpc = {}, pedidosConMeta = false, stockMovimientos = false } = {}) {
   const tables = {};
   const esquema = { pedidos_activos: pedidosConMeta ? [...PEDIDOS_COLS, 'meta'] : PEDIDOS_COLS };
   const columnaInexistente = (table, cols) => (esquema[table] ? cols.find(c => !esquema[table].includes(c)) : null);
@@ -38,8 +51,24 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
   }
   const currentBusiness = () => session?.user?.app_metadata?.business_id || null;
 
+  // Triggers de stock (solo con stockMovimientos)
+  let movSeq = 0;
+  function aplicarMovimiento(mov) { // movimientos_stock_aplicar
+    const p = tableRows('productos').find(r => String(r.id) === String(mov.producto_id) && String(r.business_id) === String(mov.business_id));
+    if (p) p.stock = Math.round((Number(p.stock || 0) + Number(mov.delta)) * 1000) / 1000;
+  }
+  function ventasStock(venta, itemsAnteriores) { // ventas_stock
+    const nuevos = cantidadesVenta(venta.items), viejos = cantidadesVenta(itemsAnteriores);
+    new Set([...Object.keys(nuevos), ...Object.keys(viejos)]).forEach(id => {
+      const delta = (viejos[id] || 0) - (nuevos[id] || 0);
+      if (!delta || !tableRows('productos').some(p => String(p.id) === id && String(p.business_id) === String(venta.business_id))) return;
+      const mov = { id: `venta:${venta.id}:${id}:${++movSeq}`, business_id: venta.business_id, producto_id: id, delta, motivo: itemsAnteriores ? 'venta editada' : 'venta' };
+      tableRows('movimientos_stock').push(mov); aplicarMovimiento(mov);
+    });
+  }
+
   function query(table) {
-    const state = { action: 'select', filters: [], order: null, limit: null, single: null, head: false, count: null, returning: false, payload: null, onConflict: 'id', columns: '*' };
+    const state = { action: 'select', filters: [], order: null, limit: null, single: null, head: false, count: null, returning: false, payload: null, onConflict: 'id', ignoreDuplicates: false, columns: '*' };
     const matches = row => state.filters.every(([op, col, val]) => {
       const cell = row[col];
       switch (op) {
@@ -58,6 +87,8 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
     function execute() {
       const bId = currentBusiness();
       if (!bId) return { data: null, error: denied(table), count: null };
+      if (table === 'movimientos_stock' && !stockMovimientos) return { data: null, error: { code: '42P01', message: 'relation "public.movimientos_stock" does not exist' }, count: null };
+      if (table === 'movimientos_stock' && (state.action === 'update' || state.action === 'delete')) return { data: null, error: denied(table), count: null };
       const col = scopeColumn(table), rows = tableRows(table);
       const visible = rows.filter(row => String(row[col]) === String(bId));
 
@@ -72,8 +103,13 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
           const key = state.onConflict;
           const existing = state.action === 'upsert' ? rows.find(row => String(row[key]) === String(record[key])) : null;
           if (existing && String(existing[col]) !== String(bId)) return null; // fila de otro negocio: invisible
-          if (existing) { Object.assign(existing, clone(record)); return existing; }
-          const row = clone(record); rows.push(row); return row;
+          if (existing && state.ignoreDuplicates) return existing; // on conflict do nothing: el trigger no se repite
+          const anteriores = existing ? clone(existing.items) : undefined;
+          let row;
+          if (existing) { Object.assign(existing, clone(record)); row = existing; } else { row = clone(record); rows.push(row); }
+          if (stockMovimientos && table === 'ventas' && (!existing || 'items' in record)) ventasStock(row, existing ? anteriores || [] : undefined);
+          if (stockMovimientos && table === 'movimientos_stock' && !existing) aplicarMovimiento(row);
+          return row;
         });
         if (written.includes(null)) return { data: null, error: rlsViolation(table), count: null };
         return { data: state.returning ? clone(written) : null, error: null, count: null };
@@ -115,7 +151,7 @@ function createMockSupabase({ businessId = 'nexobar_default', authenticated = tr
         return builder;
       },
       insert(payload) { state.action = 'insert'; state.payload = payload; return builder; },
-      upsert(payload, opts = {}) { state.action = 'upsert'; state.payload = payload; state.onConflict = opts.onConflict || 'id'; return builder; },
+      upsert(payload, opts = {}) { state.action = 'upsert'; state.payload = payload; state.onConflict = opts.onConflict || 'id'; state.ignoreDuplicates = Boolean(opts.ignoreDuplicates); return builder; },
       update(payload) { state.action = 'update'; state.payload = payload; return builder; },
       delete() { state.action = 'delete'; return builder; },
       eq(col, val) { state.filters.push(['eq', col, val]); return builder; },

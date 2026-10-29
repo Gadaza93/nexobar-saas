@@ -1302,14 +1302,14 @@ function deductInventory(order) {
     // 1. Resta ÚNICA de stock en el producto y su inventario local
     if (product) {
       const prevStock = Number(product.stock != null ? product.stock : (supply?.qty ?? 0));
-      const nextStock = Math.max(0, Number((prevStock - qtySold).toFixed(2)));
+      const nextStock = Number((prevStock - qtySold).toFixed(2)); // sin tope en 0: la nube descuenta lo mismo (stock negativo = vendido de más)
       product.stock = nextStock;
       product.updated_at = nowIso;
       product.sync_status = 'pending';
     }
 
     if (supply) {
-      supply.qty = product ? product.stock : Math.max(0, Number((supply.qty - qtySold).toFixed(2)));
+      supply.qty = product ? product.stock : Number((supply.qty - qtySold).toFixed(2));
     }
 
     // 2. Si es un cóctel/receta con insumos secundarios distintos al producto, descontar solo los insumos adicionales
@@ -1411,6 +1411,7 @@ function confirmPayment() {
       change: t.change || 0
     })),
     items: currentCheckout.items,
+    pendingStock: globalThis.NexoSync?.stockItemsQty?.(currentCheckout.items), // lo que la nube descontará al subirla
     shiftId: state.cashShift.id,
     cashierId: actor().userId,
     cashierName: actor().userName,

@@ -316,12 +316,12 @@ function adjustSoldStock(item, soldDelta) {
 
   if (prod) {
     const prevStock = Number(prod.stock != null ? prod.stock : (supply?.qty ?? 0));
-    prod.stock = Math.max(0, Number((prevStock - soldDelta).toFixed(2)));
+    prod.stock = Number((prevStock - soldDelta).toFixed(2)); // sin tope en 0: la nube aplica la misma diferencia
     prod.updated_at = nowIso;
     prod.sync_status = 'pending';
   }
   if (supply) {
-    supply.qty = prod ? prod.stock : Math.max(0, Number((supply.qty - soldDelta).toFixed(2)));
+    supply.qty = prod ? prod.stock : Number((supply.qty - soldDelta).toFixed(2));
   }
 
   // Receta con insumos secundarios distintos al producto (omitir si es el mismo insumo)
@@ -422,7 +422,11 @@ function saveInvoiceEdit() {
     const oldQty = {}, newQty = {}, sample = {};
     before.items.forEach(i => { oldQty[i.productId] = (oldQty[i.productId] || 0) + i.qty; sample[i.productId] = i; });
     items.forEach(i => { newQty[i.productId] = (newQty[i.productId] || 0) + i.qty; sample[i.productId] = i; });
-    new Set([...Object.keys(oldQty), ...Object.keys(newQty)]).forEach(id => adjustSoldStock(sample[id], (newQty[id] || 0) - (oldQty[id] || 0)));
+    new Set([...Object.keys(oldQty), ...Object.keys(newQty)]).forEach(id => {
+      const soldDelta = (newQty[id] || 0) - (oldQty[id] || 0);
+      adjustSoldStock(sample[id], soldDelta);
+      globalThis.NexoSync?.addSaleStockDelta?.(payment, id, soldDelta); // la nube aplica la misma diferencia al subir la factura
+    });
   }
   payment.items = items; payment.amount = newAmount;
   payment.customer = document.querySelector('#invoiceCustomer').value.trim() || payment.customer;
