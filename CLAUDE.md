@@ -25,12 +25,13 @@ POS para bares (antes "Brasa POS"), en español de Colombia (`es-CO`, pesos sin 
   - Para bloquear algo nuevo: agrega la función a `PLAN_FEATURES`, marca el botón con `data-plan-feature="…"` (etiqueta PRO y modal en lugar del clic) **y** valida dentro de la función con `requirePlan(…)` o `planGuard(nombre, función)` en `initModules`: ocultar el botón no basta.
   - Bajar de plan nunca borra datos: se conservan mesas y usuarios de más, pero no se agregan otros.
   - En la nube, el trigger `negocios_limite_mesas` (ver Operación de Supabase) impide que el plano de un negocio Básico crezca por encima de 10; los reportes se calculan en el equipo con datos del propio bar, así que su bloqueo es de la app. Prueba: `scratch/test-planes.js`.
+- **Recuperar acceso.** Contraseña maestra: «¿Olvidaste tu contraseña?» en Vincular Terminal (`openRecovery` en `app.js`) → Edge Function `recuperar-acceso` (`supabase/functions/recuperar-acceso/index.ts`, se publica con `verify_jwt = false`) envía por Resend un código de 6 dígitos (15 min, 5 intentos, 3 envíos por correo por hora; en la base solo su HMAC, tabla `recuperaciones_acceso`). Al pedir el código responde lo mismo exista o no el correo: no revelar qué correos son clientes. PIN: «¿Olvidaste tu PIN?» (`openPinRecovery` en `modules.js`) solo para el administrador, con la contraseña maestra del mismo negocio (`activateTerminal`); el PIN nuevo sube con `syncAdminPin`. Meseros y cajeros se lo piden al administrador. Prueba: `scratch/test-recuperar-acceso.js`.
 - **Nunca bloquear la venta por la red.** Toda operación se completa en local primero; los fallos de Supabase solo cambian el indicador de sincronización.
 - Si `supabase.min.js` no cargó, `getClient()` devuelve `null`, la app trabaja offline y `loadSupabaseLib()` reintenta desde el mismo archivo local.
 
 ## Operación de Supabase (se hace en el panel, no en el código)
 
-El esquema no está en el repositorio: estos pasos se aplican a mano en el proyecto de Supabase.
+El esquema completo no está en el repositorio: estos pasos se aplican a mano en el proyecto de Supabase. Los cambios nuevos van como archivo en `supabase/sql/` (para pegar en el SQL Editor) y las Edge Functions de la app en `supabase/functions/`; la carpeta `supabase` no se publica (`.assetsignore`) ni entra al instalador.
 
 1. **Índices** (SQL Editor; si ya existen no hace nada). Cada página de la descarga paginada es una búsqueda directa:
    ```sql
@@ -71,7 +72,8 @@ El esquema no está en el repositorio: estos pasos se aplican a mano en el proye
    drop trigger if exists negocios_limite_mesas on public.negocios;
    create trigger negocios_limite_mesas before update of configuracion on public.negocios for each row execute function public.negocios_limite_mesas();
    ```
-8. **Revisión mensual del tamaño** (SQL Editor):
+8. **Eliminar negocio y recuperar acceso** — `supabase/sql/2026-10-28_eliminar_negocio_y_recuperar_acceso.sql`: `admin_delete_negocio(p_negocio_id, p_confirmacion)` (solo superadmin; la confirmación debe ser el ID; borra en una transacción las 7 tablas con `business_id`, las cuentas de `auth.users` del negocio y la fila de `negocios` — las tablas hijas no tienen llave foránea, así que **toda tabla nueva con `business_id` debe agregarse a esta función**), la tabla `recuperaciones_acceso` y `recuperacion_buscar_cuenta` (solo service_role). La Edge Function `recuperar-acceso` usa los secretos `RESEND_API_KEY` (ya existía) y, opcional, `RECUPERACION_EMAIL_FROM` (por defecto `soporte@netxpremium.com`).
+9. **Revisión mensual del tamaño** (SQL Editor):
    ```sql
    select relname as tabla, pg_size_pretty(pg_total_relation_size(relid)) as tamano, n_live_tup as filas
    from pg_stat_user_tables order by pg_total_relation_size(relid) desc;

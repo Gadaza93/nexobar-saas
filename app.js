@@ -2263,6 +2263,10 @@ function setupActivation() {
     if (activationRelink) return finishActivation(false);
     const url = new URL(location.href); url.searchParams.set('demo', 'true'); location.assign(url.href);
   });
+  document.querySelector('#forgotPasswordButton').addEventListener('click', () => openRecovery(emailInput.value.trim().toLowerCase(), email => {
+    emailInput.value = email; passwordInput.value = ''; passwordInput.focus();
+    setMessage('Contraseña actualizada. Escríbela para vincular esta caja.', true);
+  }));
   document.querySelector('#activationForm').addEventListener('submit', async event => {
     event.preventDefault();
     const email = emailInput.value.trim().toLowerCase(), password = passwordInput.value;
@@ -2302,6 +2306,59 @@ function showActivation({ relink = false } = {}) {
     (relink && emailInput.value ? document.querySelector('#activationPassword') : emailInput).focus();
   });
 }
+/* ---------- Recuperar la contraseña maestra ----------
+   Paso 1: el correo → la Edge Function recuperar-acceso envía un código de 6 dígitos (vence en 15 min). Paso 2: código +
+   contraseña nueva. La respuesta del paso 1 es la misma exista o no el correo. Al terminar se vuelve a Vincular Terminal
+   (o a la pantalla desde la que se abrió) con el correo ya escrito. */
+let recoveryEmail = '', recoveryDone = null;
+function openRecovery(email = '', onDone = null) {
+  setupRecovery();
+  const dialog = document.querySelector('#recoveryDialog');
+  recoveryDone = onDone;
+  showRecoveryStep('request', email);
+  if (!dialog.open) dialog.showModal();
+  document.querySelector('#recoveryEmail').focus();
+}
+function showRecoveryStep(step, email = recoveryEmail) {
+  const $ = s => document.querySelector(s);
+  $('#recoveryRequestForm').hidden = step !== 'request'; $('#recoveryConfirmForm').hidden = step !== 'confirm';
+  $('#recoveryEmail').value = email || '';
+  $('#recoverySubtitle').textContent = step === 'request' ? 'Te enviaremos un código de 6 dígitos al correo del establecimiento.' : `Escribe el código que enviamos a ${email} y tu nueva contraseña.`;
+  if (step === 'request') setRecoveryMessage('');
+  ['#recoveryCode', '#recoveryPassword', '#recoveryPassword2'].forEach(s => { $(s).value = ''; });
+}
+function setRecoveryMessage(text, info = false) { const el = document.querySelector('#recoveryMessage'); el.textContent = text || ''; el.classList.toggle('is-info', info); }
+async function sendRecoveryCode(email) {
+  const $ = s => document.querySelector(s), button = $('#recoveryRequestSubmit'), resend = $('#recoveryResend');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setRecoveryMessage('Escribe un correo electrónico válido.'); return $('#recoveryEmail').focus(); }
+  button.disabled = resend.disabled = true; setRecoveryMessage('Enviando código…', true);
+  const result = globalThis.NexoSync?.requestRecoveryCode ? await NexoSync.requestRecoveryCode(email) : { ok: false, error: 'El módulo de sincronización no cargó. Recarga la app.' };
+  button.disabled = resend.disabled = false;
+  if (!result.ok) return setRecoveryMessage(result.error);
+  recoveryEmail = email; showRecoveryStep('confirm', email); setRecoveryMessage(result.mensaje, true);
+  $('#recoveryCode').focus();
+}
+function setupRecovery() {
+  const dialog = document.querySelector('#recoveryDialog'); if (dialog.dataset.ready) return; dialog.dataset.ready = '1';
+  const $ = s => document.querySelector(s);
+  $('#recoveryRequestForm').addEventListener('submit', event => { event.preventDefault(); sendRecoveryCode($('#recoveryEmail').value.trim().toLowerCase()); });
+  $('#recoveryResend').addEventListener('click', () => showRecoveryStep('request', recoveryEmail));
+  $('#recoveryCode').addEventListener('input', event => { event.target.value = event.target.value.replace(/\D/g, '').slice(0, 6); });
+  $('#recoveryConfirmForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const code = $('#recoveryCode').value.trim(), password = $('#recoveryPassword').value, confirm = $('#recoveryPassword2').value;
+    if (!/^\d{6}$/.test(code)) { setRecoveryMessage('Escribe el código de 6 números que llegó a tu correo.'); return $('#recoveryCode').focus(); }
+    if (password.length < 8) { setRecoveryMessage('La nueva contraseña debe tener al menos 8 caracteres.'); return $('#recoveryPassword').focus(); }
+    if (password !== confirm) { setRecoveryMessage('Las dos contraseñas no coinciden.'); return $('#recoveryPassword2').focus(); }
+    const button = $('#recoveryConfirmSubmit'); button.disabled = true; setRecoveryMessage('Cambiando contraseña…', true);
+    const result = await NexoSync.confirmRecoveryCode(recoveryEmail, code, password);
+    button.disabled = false;
+    if (!result.ok) return setRecoveryMessage(result.error);
+    dialog.close(); showToast(result.mensaje || 'Contraseña actualizada.');
+    const done = recoveryDone; recoveryDone = null; if (done) done(recoveryEmail);
+  });
+}
+globalThis.openRecovery = openRecovery;
 function relinkTerminal() {
   if (isDemoMode() || !state.terminal?.businessId || isSubscriptionSuspended()) return Promise.resolve(false);
   if (document.querySelector('#activationDialog')?.open) return Promise.resolve(false);

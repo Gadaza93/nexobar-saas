@@ -156,6 +156,28 @@
       </div>
     </dialog>
 
+    <!-- Eliminar negocio: borrado definitivo, se confirma escribiendo el ID (admin_delete_negocio lo vuelve a validar) -->
+    <dialog id="deleteNegocioDialog" class="small-dialog admin-dialog" aria-labelledby="deleteNegocioTitle">
+      <div class="dialog-header">
+        <div><p class="eyebrow admin-danger-eyebrow">Acción irreversible</p><h2 id="deleteNegocioTitle">Eliminar negocio</h2></div>
+        <button type="button" class="icon-button" data-close-delete aria-label="Cerrar">×</button>
+      </div>
+      <form id="deleteNegocioForm" class="activation-form" novalidate>
+        <p class="admin-delete-warning">Se borrarán de la nube <strong id="deleteNegocioName"></strong> y todos sus datos. No hay copia de seguridad: no se puede deshacer.</p>
+        <ul id="deleteNegocioSummary" class="admin-delete-summary"></ul>
+        <p class="admin-hint">Las cajas que tengan este negocio vinculado conservan sus datos locales, pero ya no podrán sincronizar.</p>
+        <label class="activation-field">
+          <span>Para confirmar, escribe el ID del negocio: <code id="deleteNegocioIdHint" class="admin-id"></code></span>
+          <input id="deleteNegocioConfirm" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" required />
+        </label>
+        <p id="deleteNegocioError" class="login-error activation-message" role="alert"></p>
+        <div class="admin-dialog-actions">
+          <button type="button" class="outline-button" data-close-delete>Cancelar</button>
+          <button id="deleteNegocioSubmit" type="submit" class="primary-button admin-danger-button" disabled>Eliminar definitivamente</button>
+        </div>
+      </form>
+    </dialog>
+
     <div id="toast" class="toast" role="status"></div>
     <script src="./admin.js"></script>
   </body>

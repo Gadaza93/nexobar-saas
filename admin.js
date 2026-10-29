@@ -141,6 +141,21 @@ async function updateNegocio(negocio, options) {
   const { error } = await getAdminClient().rpc('admin_update_negocio_status', statusPayload(negocio, options));
   if (error) throw new Error(error.message || 'Error al actualizar el negocio');
 }
+// Borrado definitivo con admin_delete_negocio(p_negocio_id, p_confirmacion): el servidor exige que la confirmación sea el ID
+const deleteConfirmMatches = (typed, id) => String(typed ?? '').trim() === String(id ?? '');
+function describeDeleteError(error) {
+  const text = `${error?.message || ''} ${error?.details || ''}`.toLowerCase();
+  if (error?.code === '42501' || /permission denied|no autorizado|not authorized/.test(text)) return 'Tu sesión no tiene permisos de SuperAdmin para eliminar negocios.';
+  if (error?.code === '22023' || /confirmaci/.test(text)) return 'El ID escrito no coincide con el del negocio.';
+  if (error?.code === 'P0002' || /no existe/.test(text)) return 'Ese negocio ya no existe. Actualiza la lista.';
+  if (error?.code === 'PGRST202' || /could not find the function/.test(text)) return 'Falta instalar la función admin_delete_negocio en Supabase (SQL de supabase/sql).';
+  return `No se pudo eliminar el negocio: ${error?.message || 'error desconocido'}`;
+}
+async function deleteNegocio(id, confirmacion) {
+  const { data, error } = await getAdminClient().rpc('admin_delete_negocio', { p_negocio_id: String(id), p_confirmacion: String(confirmacion ?? '').trim() });
+  if (error) throw new Error(describeDeleteError(error));
+  return data || {};
+}
 async function createNegocio(payload) {
   try {
     const { data, error } = await getAdminClient().rpc('admin_create_negocio', payload);
@@ -204,6 +219,7 @@ function renderNegocios() {
         <button type="button" class="admin-switch" role="switch" aria-checked="${active}" data-action="toggle" data-id="${id}" ${busy ? 'disabled' : ''} title="${active ? 'Suspender' : 'Activar'} ${escapeAdminHtml(n.nombre || n.id)}"><span class="admin-switch-track"><span class="admin-switch-thumb"></span></span><span class="admin-switch-label">${active ? 'Activo' : 'Suspendido'}</span></button>
         <button type="button" class="outline-button admin-small" data-action="plan" data-id="${id}" ${busy ? 'disabled' : ''} title="Cambiar a ${escapeAdminHtml(planLabel(otherPlan(n.plan)))}">→ ${escapeAdminHtml(planLabel(otherPlan(n.plan)))}</button>
         <button type="button" class="outline-button admin-small" data-action="extend" data-id="${id}" ${busy ? 'disabled' : ''}>+${EXTEND_DAYS} días</button>
+        <button type="button" class="outline-button admin-small admin-delete-action" data-action="delete" data-id="${id}" ${busy ? 'disabled' : ''} title="Eliminar ${escapeAdminHtml(n.nombre || n.id)} y todos sus datos">Eliminar</button>
       </div></td>
     </tr>`;
   }).join('');
@@ -225,6 +241,7 @@ async function loadNegocios({ quiet = false } = {}) {
 // Cambia estado o extiende la licencia y vuelve a consultar la lista completa
 async function applyNegocioChange(id, kind) {
   const negocio = negocios.find(n => String(n.id) === id); if (!negocio || busyIds.has(id)) return;
+  if (kind === 'delete') return openDeleteDialog(negocio);
   const active = negocio.activo !== false, name = negocio.nombre || negocio.id;
   if (kind === 'toggle' && active && !confirm(`¿Suspender «${name}»? Su POS quedará bloqueado hasta reactivarlo.`)) return;
   const nextPlan = otherPlan(negocio.plan);
@@ -236,6 +253,42 @@ async function applyNegocioChange(id, kind) {
     adminToast(kind === 'extend' ? `Licencia de «${name}» extendida ${EXTEND_DAYS} días.` : kind === 'plan' ? `«${name}» ahora tiene el plan ${planLabel(nextPlan)}.` : `«${name}» ${active ? 'suspendido' : 'activado'}.`);
   } catch (err) {
     adminToast(`⚠ No se pudo actualizar «${name}»: ${err.message}`);
+  } finally {
+    busyIds.delete(id);
+    await loadNegocios({ quiet: true });
+  }
+}
+
+/* ---------- Modal de eliminación ---------- */
+let deleting = null; // negocio que se está por eliminar
+function openDeleteDialog(negocio) {
+  deleting = negocio;
+  const nombre = negocio.nombre || 'Sin nombre', fmt = n => fmtInt.format(Number(n) || 0);
+  $('#deleteNegocioName').textContent = `«${nombre}»`;
+  $('#deleteNegocioIdHint').textContent = negocio.id;
+  $('#deleteNegocioSummary').innerHTML = [
+    `${fmt(negocio.total_productos)} productos y ${fmt(negocio.total_ventas)} ventas`,
+    'Gastos, mermas, proveedores, turnos de caja y pedidos abiertos',
+    'Las cuentas de acceso (correo y contraseña) del negocio',
+  ].map(t => `<li>${escapeAdminHtml(t)}</li>`).join('');
+  $('#deleteNegocioConfirm').value = ''; $('#deleteNegocioError').textContent = '';
+  $('#deleteNegocioSubmit').disabled = true; $('#deleteNegocioSubmit').textContent = 'Eliminar definitivamente';
+  $('#deleteNegocioDialog').showModal(); $('#deleteNegocioConfirm').focus();
+}
+function closeDeleteDialog() { const dialog = $('#deleteNegocioDialog'); if (dialog.open) dialog.close(); deleting = null; }
+async function handleDeleteSubmit(event) {
+  event.preventDefault();
+  const negocio = deleting, typed = $('#deleteNegocioConfirm').value;
+  if (!negocio || !deleteConfirmMatches(typed, negocio.id)) { $('#deleteNegocioError').textContent = 'Escribe el ID exacto del negocio para confirmar.'; return; }
+  const id = String(negocio.id), name = negocio.nombre || negocio.id, submit = $('#deleteNegocioSubmit');
+  submit.disabled = true; submit.textContent = 'Eliminando…'; busyIds.add(id); renderNegocios();
+  try {
+    const res = await deleteNegocio(id, typed);
+    closeDeleteDialog();
+    adminToast(`«${name}» eliminado: ${fmtInt.format(Number(res.ventas) || 0)} ventas, ${fmtInt.format(Number(res.productos) || 0)} productos y ${fmtInt.format(Number(res.cuentas) || 0)} ${Number(res.cuentas) === 1 ? 'cuenta' : 'cuentas'} de acceso.`);
+  } catch (err) {
+    $('#deleteNegocioError').textContent = err.message; submit.textContent = 'Eliminar definitivamente';
+    submit.disabled = !deleteConfirmMatches($('#deleteNegocioConfirm').value, id);
   } finally {
     busyIds.delete(id);
     await loadNegocios({ quiet: true });
@@ -323,6 +376,10 @@ async function initAdmin() {
   document.querySelectorAll('[data-close-created]').forEach(btn => btn.addEventListener('click', closeCreatedDialog));
   $('#negocioDialog').addEventListener('cancel', () => { $('#negocioPassword').value = ''; });
   $('#negocioCreatedDialog').addEventListener('close', closeCreatedDialog);
+  $('#deleteNegocioForm').addEventListener('submit', handleDeleteSubmit);
+  $('#deleteNegocioConfirm').addEventListener('input', event => { $('#deleteNegocioSubmit').disabled = !deleting || !deleteConfirmMatches(event.target.value, deleting.id); $('#deleteNegocioError').textContent = ''; });
+  document.querySelectorAll('[data-close-delete]').forEach(btn => btn.addEventListener('click', closeDeleteDialog));
+  $('#deleteNegocioDialog').addEventListener('close', () => { deleting = null; });
   $('#negociosBody').addEventListener('click', event => {
     const button = event.target.closest('button[data-action]'); if (!button) return;
     if (button.dataset.action === 'reload') return loadNegocios();
@@ -347,5 +404,5 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initAdmin); else initAdmin();
 }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isSuperadmin, computeMetrics, expiryInfo, statusPayload, escapeAdminHtml, adminSignIn, fetchNegocios, updateNegocio, NOT_SUPERADMIN, EXTEND_DAYS, slugifyNegocioId, generatePassword, buildCreatePayload, describeCreateError, credentialsText, createNegocio, planLabel, otherPlan };
+  module.exports = { isSuperadmin, computeMetrics, expiryInfo, statusPayload, escapeAdminHtml, adminSignIn, fetchNegocios, updateNegocio, NOT_SUPERADMIN, EXTEND_DAYS, slugifyNegocioId, generatePassword, buildCreatePayload, describeCreateError, credentialsText, createNegocio, planLabel, otherPlan, deleteNegocio, deleteConfirmMatches, describeDeleteError };
 }

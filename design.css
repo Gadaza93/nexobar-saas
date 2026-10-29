@@ -1597,3 +1597,11 @@ html.is-booting body::after { content: ''; position: fixed; top: 50%; left: 50%;
 .plan-table-count { margin-top: 6px; color: var(--accent-ink); font-size: 13px; font-weight: 600; }
 .plan-upgrade-button { margin-top: 12px; }
 .plan-upgrade-list { margin: 4px 0 14px; padding-left: 20px; color: var(--muted); font-size: 14px; line-height: 1.7; text-align: left; }
+
+/* ============ Recuperar acceso (contraseña maestra y PIN) ============ */
+.activation-forgot, .login-forgot { justify-self: center; padding: 4px 0; font-size: 13px; }
+.activation-forgot { margin-top: -6px; }
+.login-forgot { display: block; margin: 6px auto 0; }
+.recovery-code { font-size: 22px !important; letter-spacing: .4em; text-align: center; font-variant-numeric: tabular-nums; }
+#pinRecoveryDialog .two-fields { gap: 10px; }
+#pinRecoveryDialog .two-fields input { margin-bottom: 0; }

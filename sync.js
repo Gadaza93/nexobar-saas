@@ -211,6 +211,30 @@ async function activateTerminal(email, password) {
   }
 }
 
+// Recuperación de la contraseña maestra (Edge Function recuperar-acceso, pública): pedir el código por correo y
+// confirmarlo con la contraseña nueva. La función responde { ok, mensaje | error } también en los errores de negocio.
+const RECUPERACION_SIN_CONEXION = "No se pudo conectar con el servidor de NexoBar. Revisa tu conexión e intenta de nuevo.";
+async function recuperarAcceso(body) {
+  if (isDemoMode()) return { ok: false, error: "El Modo Demo no tiene cuenta que recuperar." };
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return { ok: false, error: "Necesitas conexión a internet para recuperar el acceso." };
+  if (!hasSupabaseLib()) await loadSupabaseLib();
+  const sb = getClient();
+  if (!sb || !sb.functions) return { ok: false, error: RECUPERACION_SIN_CONEXION };
+  try {
+    const { data, error } = await sb.functions.invoke("recuperar-acceso", { body });
+    if (data && typeof data === "object" && "ok" in data) return data;
+    // Respuesta 500 de la función: el mensaje viene en el cuerpo
+    const cuerpo = error?.context && typeof error.context.json === "function" ? await error.context.json().catch(() => null) : null;
+    if (cuerpo && typeof cuerpo === "object" && "ok" in cuerpo) return cuerpo;
+    return { ok: false, error: RECUPERACION_SIN_CONEXION };
+  } catch (err) {
+    console.warn("[NexoSync] Error en recuperar-acceso:", err);
+    return { ok: false, error: RECUPERACION_SIN_CONEXION };
+  }
+}
+const requestRecoveryCode = email => recuperarAcceso({ accion: "solicitar", email });
+const confirmRecoveryCode = (email, codigo, password) => recuperarAcceso({ accion: "confirmar", email, codigo, password });
+
 // ¿Hay sesión de Supabase Auth? Sin ella las consultas irían como 'anon': con RLS estricto el servidor
 // devolvería listas vacías sin error y la descarga borraría el catálogo local. Por eso no se sincroniza.
 async function hasAuthSession(sb = getClient()) {
@@ -2378,6 +2402,8 @@ rootScope.NexoSync = {
   isDemoMode: () => globalThis.isDemoMode(),
   getClient,
   activateTerminal,
+  requestRecoveryCode,
+  confirmRecoveryCode,
   isTerminalLinked,
   hasAuthSession,
   signOutTerminal,

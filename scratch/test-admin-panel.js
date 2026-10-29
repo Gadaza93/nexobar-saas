@@ -132,6 +132,29 @@ const admin = require('../admin.js');
   assert.strictEqual(admin.planLabel('basico'), 'BÁSICO');
   console.log('   ✅ «Copiar credenciales» arma el texto listo para WhatsApp.');
 
+  // --- 4. Eliminar negocio ---
+  assert.strictEqual(admin.deleteConfirmMatches('bar_la_estacion', 'bar_la_estacion'), true);
+  assert.strictEqual(admin.deleteConfirmMatches('  bar_la_estacion ', 'bar_la_estacion'), true, 'espacios alrededor no cuentan');
+  assert.strictEqual(admin.deleteConfirmMatches('BAR_LA_ESTACION', 'bar_la_estacion'), false, 'debe ser exacto');
+  assert.strictEqual(admin.deleteConfirmMatches('ELIMINAR', 'bar_la_estacion'), false);
+  assert.strictEqual(admin.deleteConfirmMatches('', 'bar_la_estacion'), false);
+  rpcCalls = []; rpcResult = { data: { id: 'bar_la_estacion', ventas: 19, productos: 40, cuentas: 1 }, error: null };
+  const borrado = await admin.deleteNegocio('bar_la_estacion', ' bar_la_estacion ');
+  assert.deepStrictEqual(rpcCalls, [{ name: 'admin_delete_negocio', params: { p_negocio_id: 'bar_la_estacion', p_confirmacion: 'bar_la_estacion' } }]);
+  assert.strictEqual(borrado.cuentas, 1);
+  for (const [error, re] of [
+    [{ code: '42501', message: 'Acceso no autorizado' }, /permisos de SuperAdmin/],
+    [{ code: '22023', message: 'La confirmación no coincide con el ID del negocio' }, /no coincide/],
+    [{ code: 'P0002', message: 'El negocio "x" no existe' }, /ya no existe/],
+    [{ code: 'PGRST202', message: 'Could not find the function public.admin_delete_negocio' }, /Falta instalar/],
+  ]) {
+    rpcResult = { data: null, error };
+    await assert.rejects(admin.deleteNegocio('bar_la_estacion', 'bar_la_estacion'), re);
+  }
+  const html = require('fs').readFileSync(require('path').join(__dirname, '..', 'admin.html'), 'utf8');
+  assert.match(html, /id="deleteNegocioSubmit"[^>]*disabled/, 'el botón final arranca deshabilitado');
+  console.log('   ✅ Eliminar: la confirmación exige el ID exacto, admin_delete_negocio la recibe y sus errores se explican.');
+
   console.log('\n=== TODAS LAS PRUEBAS DEL PANEL SUPERADMIN PASARON ===');
   process.exit(0);
 })().catch(err => { console.error('❌', err); process.exit(1); });

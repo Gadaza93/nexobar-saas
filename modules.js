@@ -128,6 +128,7 @@ function renderLogin() {
   const roleOk = u => typeof planAllowsRole !== 'function' || planAllowsRole(u.role);
   document.querySelector('#loginUsers').innerHTML = active.map(u => `<button class="login-user${roleOk(u) ? '' : ' plan-locked'}" data-login-user="${u.id}"${roleOk(u) ? '' : ' title="Varios usuarios y roles: Plan Pro"'}><span class="mini-avatar">${escapeHtml(initials(u.name))}</span><strong>${escapeHtml(u.name)}</strong><small>${escapeHtml(ROLE_LABELS[u.role] || u.role)}</small>${roleOk(u) ? '' : '<span class="pro-tag">PRO</span>'}</button>`).join('');
   document.querySelector('#loginWho').textContent = target ? target.name : '';
+  const forgotPin = document.querySelector('#forgotPinButton'); if (forgotPin) forgotPin.hidden = typeof isDemoMode === 'function' && isDemoMode();
   document.querySelectorAll('#pinDots i').forEach((dot, index) => dot.classList.toggle('filled', index < loginPin.length));
   const firstRun = state.users.find(u => u.mustChangePin && u.role === 'admin');
   document.querySelector('#loginHint').textContent = firstRun ? `Primer ingreso: usuario «${firstRun.name}», PIN 1234. Se te pedirá cambiarlo.` : '';
@@ -158,6 +159,49 @@ function completeLogin(user) {
   loginTarget = null; loginPin = ''; document.querySelector('#loginDialog').close();
   applyPermissions(); renderAll(); showView('pos'); showToast(`Hola, ${user.name}.`);
   if (user.mustChangePin) openPinDialog(true);
+}
+/* ---------- ¿Olvidaste tu PIN? ----------
+   Solo el PIN de administrador se restablece aquí, y solo con la contraseña maestra del negocio (verificada en Supabase,
+   con internet). Meseros y cajeros se lo piden al administrador (Equipo → Editar). El PIN nuevo llega a las demás cajas
+   por syncAdminPin. Si también olvidaron la contraseña maestra, se abre la recuperación por correo (app.js). */
+let pinRecoveryUserId = null;
+function setPinRecoveryMessage(text, info = false) { const el = document.querySelector('#pinRecoveryMessage'); el.textContent = text || ''; el.classList.toggle('is-info', info); }
+function openPinRecovery() {
+  const user = state.users.find(u => u.id === loginTarget); if (!user) return;
+  if (user.role !== 'admin') return setLoginError('Pide al administrador que restablezca tu PIN en Equipo → Editar.');
+  if (!state.terminal?.businessId) return setLoginError('Esta caja no está vinculada a un negocio: no se puede verificar la contraseña maestra.');
+  pinRecoveryUserId = user.id;
+  const $ = s => document.querySelector(s);
+  $('#pinRecoveryEmail').value = state.terminal.email || '';
+  ['#pinRecoveryPassword', '#pinRecoveryPin', '#pinRecoveryPin2'].forEach(s => { $(s).value = ''; });
+  setPinRecoveryMessage(''); $('#pinRecoverySubmit').disabled = false;
+  $('#pinRecoveryDialog').showModal();
+  ($('#pinRecoveryEmail').value ? $('#pinRecoveryPassword') : $('#pinRecoveryEmail')).focus();
+}
+async function savePinRecovery(event) {
+  event.preventDefault();
+  const $ = s => document.querySelector(s), user = state.users.find(u => u.id === pinRecoveryUserId); if (!user) return;
+  const email = $('#pinRecoveryEmail').value.trim().toLowerCase(), password = $('#pinRecoveryPassword').value, pin = $('#pinRecoveryPin').value.trim(), confirm = $('#pinRecoveryPin2').value.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setPinRecoveryMessage('Escribe un correo electrónico válido.'); return $('#pinRecoveryEmail').focus(); }
+  if (!password) { setPinRecoveryMessage('Escribe la contraseña maestra.'); return $('#pinRecoveryPassword').focus(); }
+  if (!/^\d{4}$/.test(pin)) { setPinRecoveryMessage('El PIN debe tener exactamente 4 números.'); return $('#pinRecoveryPin').focus(); }
+  if (pin !== confirm) { setPinRecoveryMessage('Los dos PIN no coinciden.'); return $('#pinRecoveryPin2').focus(); }
+  $('#pinRecoverySubmit').disabled = true; setPinRecoveryMessage('Verificando la contraseña maestra…', true);
+  const result = globalThis.NexoSync?.activateTerminal ? await NexoSync.activateTerminal(email, password) : { ok: false, error: 'El módulo de sincronización no cargó. Recarga la app.' };
+  $('#pinRecoverySubmit').disabled = false;
+  if (!result.ok) return setPinRecoveryMessage(result.error);
+  if (result.businessId !== state.terminal?.businessId) {
+    await NexoSync.signOutTerminal();
+    return setPinRecoveryMessage(`Estas credenciales son de otro negocio. Esta caja está vinculada a «${state.terminal?.businessId}».`);
+  }
+  setUserPin(user, pin); user.mustChangePin = false;
+  state.terminal = { ...state.terminal, email: result.email };
+  logAudit('PIN restablecido', `${user.name} · con la contraseña maestra`);
+  saveState();
+  if (globalThis.NexoSync?.syncAdminPin) NexoSync.syncAdminPin(pin, user).catch(err => console.warn('[NexoSync] Error syncAdminPin:', err));
+  $('#pinRecoveryDialog').close();
+  completeLogin(user);
+  showToast('PIN restablecido. Ya puedes entrar con el PIN nuevo.');
 }
 function openSessionDialog() { const user = me(); if (!user) return; document.querySelector('#sessionName').textContent = user.name; document.querySelector('#sessionRole').textContent = ROLE_LABELS[user.role]; document.querySelector('#sessionDialog').showModal(); }
 function openPinDialog(forced = false) { forcedPinChange = forced; document.querySelector('#newPin').value = ''; document.querySelector('#confirmPin').value = ''; document.querySelector('#pinDialogClose').hidden = forced; document.querySelector('#pinForcedNote').hidden = !forced; document.querySelector('#sessionDialog').close(); document.querySelector('#pinDialog').showModal(); }
@@ -1324,7 +1368,13 @@ function handleModuleClick(event) {
   if (d.floorTipo) return setFloorTipo(d.floorTipo);
   if (d.netRange) { if (d.netRange === 'custom' && !netFrom) ({ from: netFrom, to: netTo } = netBounds()); netRange = d.netRange; return renderNetProfit(); } // el personalizado arranca con el rango que se estaba viendo
   const actions = {
-    loginBackButton: () => { loginTarget = null; loginPin = ''; setLoginError(''); renderLogin(); }, userChip: openSessionDialog, logoutButton: showLogin, changePinButton: () => openPinDialog(false), savePinButton: savePin,
+    loginBackButton: () => { loginTarget = null; loginPin = ''; setLoginError(''); renderLogin(); },
+    forgotPinButton: openPinRecovery,
+    pinRecoveryForgotPassword: () => globalThis.openRecovery?.(document.querySelector('#pinRecoveryEmail').value.trim().toLowerCase(), email => {
+      document.querySelector('#pinRecoveryEmail').value = email; document.querySelector('#pinRecoveryPassword').value = '';
+      document.querySelector('#pinRecoveryPassword').focus(); setPinRecoveryMessage('Contraseña actualizada. Escríbela aquí para restablecer el PIN.', true);
+    }),
+    userChip: openSessionDialog, logoutButton: showLogin, changePinButton: () => openPinDialog(false), savePinButton: savePin,
     newUserButton: () => openUserDialog(), saveUserButton: saveUser, saveInvoiceButton: saveInvoiceEdit, invoiceAddButton: addInvoiceLine, invoiceAddTender: () => { if (!invoiceDraft) return; invoiceDraft.tenders.push({ method: 'Nequi', amount: 0 }); renderInvoiceTenders(); }, confirmDeleteInvoiceButton: confirmDeleteInvoice,
     invoiceTodayButton: () => { invoiceFilter.date = ''; renderInvoices(); }, invoiceAllButton: () => { invoiceFilter.date = 'all'; renderInvoices(); },
     newSupplierButton: () => openSupplierDialog(), saveSupplierButton: saveSupplier, newWasteButton: openWasteDialog, saveWasteButton: saveWaste, newCountButton: openCountDialog, applyCountButton: applyCount,
@@ -1366,6 +1416,7 @@ function handleModuleChange(event) {
 }
 function handleLoginKeys(event) {
   if (!document.querySelector('#loginDialog').open || !loginTarget) return;
+  if (document.querySelector('#pinRecoveryDialog')?.open || document.querySelector('#recoveryDialog')?.open) return; // se está escribiendo en la recuperación
   if (/^\d$/.test(event.key)) { event.preventDefault(); pressPin(event.key); } else if (event.key === 'Backspace') { event.preventDefault(); pressPin('back'); }
 }
 function initModules() {
@@ -1384,6 +1435,7 @@ function initModules() {
   document.addEventListener('pointerdown', handleFloorPointerDown); document.addEventListener('pointermove', handleFloorPointerMove); document.addEventListener('pointerup', handleFloorPointerUp); document.addEventListener('pointercancel', handleFloorPointerUp); document.addEventListener('keydown', handleFloorKeys);
   document.addEventListener('click', handleModuleClick); document.addEventListener('input', handleModuleInput); document.addEventListener('change', handleModuleChange); document.addEventListener('keydown', handleLoginKeys);
   document.querySelector('#loginDialog').addEventListener('cancel', e => e.preventDefault());
+  document.querySelector('#pinRecoveryForm')?.addEventListener('submit', savePinRecovery);
   document.querySelector('#pinDialog').addEventListener('cancel', e => { if (forcedPinChange) e.preventDefault(); });
   if (typeof isDemoMode === 'function' && isDemoMode()) {
     const guest = state.users.find(u => u.id === 'u_demo_guest') || state.users[0];

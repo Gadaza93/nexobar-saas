@@ -105,3 +105,12 @@
 .admin-dialog input, .admin-dialog select { margin-bottom: 0; }
 .admin-input-row { align-items: center; }
 .admin-input-row .admin-small { height: 44px; padding: 0 14px; }
+
+/* Eliminar negocio */
+.admin-delete-action { color: var(--danger); border-color: var(--danger-soft); }
+.admin-delete-action:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); }
+.admin-dialog .admin-danger-eyebrow { color: var(--danger); }
+.admin-delete-warning { margin: 0; padding: 12px 14px; border-radius: var(--r-sm); background: var(--danger-soft); border: 1px solid var(--danger); color: var(--text); font-size: 14px; line-height: 1.5; }
+.admin-delete-summary { margin: 0; padding-left: 20px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.admin-danger-button { background: var(--danger); border-color: var(--danger); color: var(--text); }
+.admin-danger-button:disabled { opacity: .45; cursor: not-allowed; }

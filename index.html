@@ -476,6 +476,7 @@
         <p class="login-who"><button id="loginBackButton" class="text-add-button">← Cambiar usuario</button><strong id="loginWho"></strong></p>
         <div class="pin-dots" id="pinDots"><i></i><i></i><i></i><i></i></div>
         <p id="loginError" class="login-error" role="alert"></p>
+        <button id="forgotPinButton" type="button" class="text-add-button login-forgot">¿Olvidaste tu PIN?</button>
         <div class="keypad">
           <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button><button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button><button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button><span></span><button data-key="0">0</button><button data-key="back" aria-label="Borrar">⌫</button>
         </div>
@@ -500,11 +501,73 @@
           <span>Contraseña maestra</span>
           <input id="activationPassword" type="password" autocomplete="current-password" placeholder="••••••••" required />
         </label>
+        <button id="forgotPasswordButton" type="button" class="text-add-button activation-forgot">¿Olvidaste tu contraseña?</button>
         <p id="activationError" class="login-error activation-message" role="alert"></p>
         <button id="activationSubmit" type="submit" class="primary-button activation-primary">Vincular y Descargar Catálogo</button>
         <button id="activationDemo" type="button" class="outline-button activation-secondary">Probar Modo Demo</button>
       </form>
       <p class="muted center activation-foot">Esta vinculación se hace una sola vez por equipo. Después la caja funciona sin conexión.</p>
+    </dialog>
+
+    <!-- Recuperar la contraseña maestra: código de 6 dígitos por correo (Edge Function recuperar-acceso) -->
+    <dialog id="recoveryDialog" class="small-dialog login-dialog activation-dialog" aria-labelledby="recoveryTitle">
+      <div class="login-brand activation-brand">
+        <p class="eyebrow">NexoBar POS</p>
+        <h2 id="recoveryTitle">Recuperar contraseña</h2>
+        <p id="recoverySubtitle" class="muted">Te enviaremos un código de 6 dígitos al correo del establecimiento.</p>
+      </div>
+      <form id="recoveryRequestForm" class="activation-form" novalidate>
+        <label class="activation-field">
+          <span>Correo electrónico del establecimiento</span>
+          <input id="recoveryEmail" type="email" autocomplete="username" inputmode="email" placeholder="caja@tubar.com" required />
+        </label>
+        <button id="recoveryRequestSubmit" type="submit" class="primary-button activation-primary">Enviar código</button>
+      </form>
+      <form id="recoveryConfirmForm" class="activation-form" novalidate hidden>
+        <label class="activation-field">
+          <span>Código de 6 dígitos</span>
+          <input id="recoveryCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" class="recovery-code" required />
+        </label>
+        <label class="activation-field">
+          <span>Nueva contraseña maestra</span>
+          <input id="recoveryPassword" type="password" autocomplete="new-password" placeholder="Mínimo 8 caracteres" required />
+        </label>
+        <label class="activation-field">
+          <span>Confirmar contraseña</span>
+          <input id="recoveryPassword2" type="password" autocomplete="new-password" placeholder="Repite la contraseña" required />
+        </label>
+        <button id="recoveryConfirmSubmit" type="submit" class="primary-button activation-primary">Cambiar contraseña</button>
+        <button id="recoveryResend" type="button" class="text-add-button activation-forgot">¿No llegó? Enviar otro código</button>
+      </form>
+      <p id="recoveryMessage" class="login-error activation-message" role="alert"></p>
+      <button type="button" class="outline-button activation-secondary" data-close="recoveryDialog">Volver</button>
+    </dialog>
+
+    <!-- Restablecer el PIN de administrador con la contraseña maestra (necesita internet) -->
+    <dialog id="pinRecoveryDialog" class="small-dialog login-dialog activation-dialog" aria-labelledby="pinRecoveryTitle">
+      <div class="login-brand activation-brand">
+        <p class="eyebrow">NexoBar POS</p>
+        <h2 id="pinRecoveryTitle">Restablecer PIN</h2>
+        <p class="muted">Confirma la contraseña maestra del negocio para crear un PIN nuevo de administrador.</p>
+      </div>
+      <form id="pinRecoveryForm" class="activation-form" novalidate>
+        <label class="activation-field">
+          <span>Correo electrónico del establecimiento</span>
+          <input id="pinRecoveryEmail" type="email" autocomplete="username" inputmode="email" placeholder="caja@tubar.com" required />
+        </label>
+        <label class="activation-field">
+          <span>Contraseña maestra</span>
+          <input id="pinRecoveryPassword" type="password" autocomplete="current-password" placeholder="••••••••" required />
+        </label>
+        <div class="two-fields">
+          <label class="activation-field"><span>Nuevo PIN</span><input id="pinRecoveryPin" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="4 números" required /></label>
+          <label class="activation-field"><span>Confirmar PIN</span><input id="pinRecoveryPin2" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="4 números" required /></label>
+        </div>
+        <p id="pinRecoveryMessage" class="login-error activation-message" role="alert"></p>
+        <button id="pinRecoverySubmit" type="submit" class="primary-button activation-primary">Restablecer PIN y entrar</button>
+        <button id="pinRecoveryForgotPassword" type="button" class="text-add-button activation-forgot">¿También olvidaste la contraseña maestra?</button>
+        <button type="button" class="outline-button activation-secondary" data-close="pinRecoveryDialog">Cancelar</button>
+      </form>
     </dialog>
 
     <dialog id="sessionDialog" class="small-dialog">
