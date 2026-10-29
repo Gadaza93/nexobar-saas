@@ -1222,8 +1222,14 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
   max-width: 460px !important;
   width: 90% !important;
   padding: 0 !important;
-  overflow: hidden !important;
+  overflow: hidden !important; /* bordes redondeados; el desplazamiento va en .obsidian-modal-body */
+  max-height: 85vh !important;
+  max-height: 85dvh !important; /* móviles: descuenta la barra del navegador */
 }
+/* Abierto: encabezado fijo y cuerpo con scroll, para que ningún botón quede recortado en pantallas bajas */
+.obsidian-modal[open] { display: flex !important; flex-direction: column; }
+.obsidian-modal[open] > .obsidian-modal-header { flex: none; }
+.obsidian-modal[open] > .obsidian-modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 
 .obsidian-modal::backdrop {
   background: rgba(4, 7, 12, 0.85) !important;
@@ -1605,3 +1611,14 @@ html.is-booting body::after { content: ''; position: fixed; top: 50%; left: 50%;
 .recovery-code { font-size: 22px !important; letter-spacing: .4em; text-align: center; font-variant-numeric: tabular-nums; }
 #pinRecoveryDialog .two-fields { gap: 10px; }
 #pinRecoveryDialog .two-fields input { margin-bottom: 0; }
+
+/* Modales Obsidian en pantallas bajas (portátiles, móviles en horizontal): más compactos para que quepan sin scroll */
+@media (max-height: 720px) {
+  .obsidian-modal-header { padding: 16px 20px 12px; }
+  .obsidian-modal-body { padding: 16px 20px 20px; gap: 12px; }
+  .obsidian-icon-glow { display: none; }
+  .obsidian-message { font-size: 14px; line-height: 1.5; }
+  .plan-upgrade-list { margin: 0 0 4px; line-height: 1.55; }
+  .obsidian-wa-btn { padding: 12px 16px !important; }
+  .obsidian-close-btn { padding: 9px !important; }
+}
