@@ -150,6 +150,8 @@ ok('el plan llega al descargar y en tiempo real; si pasa a Básico con un cajero
 run('fresh("basico"); state.profile.name = "Bar Luna";');
 const url = run('planUpgradeUrl("tables")');
 assert.match(decodeURIComponent(url), /Bar Luna.*Plan Pro.*Mesas ilimitadas/);
+assert.ok(url.startsWith('https://wa.me/573052484278?text='), 'abre el chat de la línea de soporte');
+assert.ok(run('getNetxpremiumWhatsappUrl()').startsWith('https://wa.me/573052484278?text='), 'el modal del demo usa la misma línea');
 global.__IS_NODE_TEST__ = true;
 const admin = require('../admin.js');
 assert.deepStrictEqual(admin.statusPayload({ id: 'bar_x', activo: true, plan: 'pro' }, { plan: admin.otherPlan('pro') }), { p_negocio_id: 'bar_x', p_activo: true, p_plan: 'basico', p_extender_dias: 0 });

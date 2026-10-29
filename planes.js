@@ -8,6 +8,8 @@
    propio bar: su restricción es de la app. */
 
 const PLAN_MAX_MESAS = 10; // mismo valor que el trigger de Supabase
+// Línea de soporte y ventas de Netxpremium (wa.me, con indicativo y sin «+»). También la usa el modal del modo demo (app.js).
+globalThis.NETXPREMIUM_WHATSAPP = globalThis.NETXPREMIUM_WHATSAPP || '573052484278';
 const PLAN_FEATURES = {
   floorMap: { label: 'Mapa interactivo de mesas', detail: 'Ver el salón como plano y mover las mesas arrastrándolas.' },
   inventoryValue: { label: 'Valoración de inventario', detail: 'Capital invertido, valor comercial y ganancia proyectada en bodega.' },

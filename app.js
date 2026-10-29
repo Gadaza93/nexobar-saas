@@ -152,7 +152,7 @@ function isDemoLimitReached() {
 }
 
 function getNetxpremiumWhatsappUrl() {
-  const phone = (window.NETXPREMIUM_WHATSAPP || '').replace(/\D/g, '');
+  const phone = (globalThis.NETXPREMIUM_WHATSAPP || '').replace(/\D/g, ''); // definido en planes.js
   const text = encodeURIComponent('Hola Netxpremium, he probado la demo de NexoBar POS y deseo adquirir el sistema completo sin límites.');
   return phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`;
 }

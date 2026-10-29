@@ -53,7 +53,7 @@ El esquema no está en el repositorio: estos pasos se aplican a mano en el proye
 4. **Plan Pro** antes del primer cliente de pago (Organization → Billing). El plan gratuito pausa el proyecto tras una semana sin uso, tiene 500 MB de base de datos y no incluye copias de seguridad descargables.
 5. **Copias de seguridad**: Pro hace una copia diaria automática (Database → Backups). Para poder volver a un minuto exacto, activar el complemento Point in Time Recovery (costo aparte).
 6. **Alertas de uso**: Organization → Billing → dejar activado el *spend cap* hasta conocer el consumo real, y revisar Reports → Database (tamaño y conexiones) y Usage (transferencia) cada mes. Los avisos de uso llegan al correo de facturación configurado en Organization → Billing.
-7. **Límite de mesas del Plan Básico en la nube** — **pendiente de aplicar** (SQL Editor). Si una caja sube un plano más grande que 10 y que el que ya había, se conserva el plano anterior y el resto de la configuración se guarda normal (la caja no queda sin sincronizar). El 10 es el mismo `PLAN_MAX_MESAS` de `planes.js`:
+7. **Límite de mesas del Plan Básico en la nube** — **aplicado el 28-10-2026** (trigger `negocios_limite_mesas`; para un proyecto nuevo, en el SQL Editor). Si una caja sube un plano más grande que 10 y que el que ya había, se conserva el plano anterior y el resto de la configuración se guarda normal (la caja no queda sin sincronizar). El 10 es el mismo `PLAN_MAX_MESAS` de `planes.js`:
    ```sql
    create or replace function public.negocios_limite_mesas() returns trigger language plpgsql set search_path = public as $$
    declare v_max constant int := 10; v_nuevo int; v_anterior int;
