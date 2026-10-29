@@ -163,6 +163,47 @@ dialog { border:0; padding:0; color:var(--text); background:var(--surface); box-
   flex-shrink: 0;
   margin-bottom: 2px;
 }
+/* Escritorio (Windows, portátiles 1366×768): el modal de pedido nunca pasa del alto de la ventana.
+   La columna de la cuenta deja fijos arriba el encabezado y abajo nota, total y botones;
+   solo la lista de ítems hace scroll. Sin min-height: 0 la lista crecía y recortaba el pie. */
+@media (min-width: 769px) {
+  #orderDialog[open] {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - 24px);
+    overflow: hidden;
+  }
+  #orderDialog > .dialog-header { flex-shrink: 0; }
+  #orderDialog .order-layout {
+    flex: 0 1 auto;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+  }
+  #orderDialog .catalog-panel,
+  #orderDialog .product-grid { min-height: 0; }
+  #orderDialog .ticket-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+  #orderDialog .ticket-panel > * { flex-shrink: 0; }
+  #orderDialog .ticket-panel > .ticket-items {
+    flex: 1 1 auto;
+    min-height: 64px;
+    max-height: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  #orderDialog .ticket-note textarea { max-height: 96px; }
+}
+@media (min-width: 769px) and (max-height: 720px) {
+  #orderDialog .ticket-panel { padding: 14px 16px; }
+  #orderDialog .ticket-items { margin: 10px 0; }
+  #orderDialog .ticket-total { margin-top: 8px; padding-top: 10px; }
+  #orderDialog .ticket-total strong { font-size: 24px; }
+  #orderDialog .ticket-actions { margin-top: 10px; }
+}
 .category-tabs {
   display: flex;
   gap: 6px;
