@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
+const espejo = require('./espejo-partes.js');
 
 const gotLock = app.requestSingleInstanceLock(); // una sola ventana del POS a la vez
 if (!gotLock) app.quit();
@@ -16,6 +17,7 @@ const userDir = () => app.getPath('userData');
 const configFile = () => path.join(userDir(), 'config.json');
 const mirrorFile = () => path.join(userDir(), 'datos', 'nexobar-pos.json');
 const legacyMirrorFile = () => path.join(userDir(), 'datos', 'brasa-pos.json'); // instalaciones anteriores al cambio de nombre
+const mirrorPartsDir = () => path.join(userDir(), 'datos', 'partes'); // espejo por partes (espejo-partes.js)
 const BACKUP_PATTERN = /^(nexobar|brasa)-pos-respaldo-.*\.json$/, KEEP_BACKUPS = 120;
 
 function readConfig() { try { return JSON.parse(fs.readFileSync(configFile(), 'utf8')); } catch { return {}; } }
@@ -28,6 +30,7 @@ function pruneBackups(dir) {
 }
 
 ipcMain.handle('mirror:load', () => {
+  try { const partes = espejo.cargarPartes(mirrorPartsDir()); if (partes) return partes; } catch { /* ilegible: probar el archivo único */ }
   for (const file of [mirrorFile(), legacyMirrorFile()]) { try { return fs.readFileSync(file, 'utf8'); } catch { /* no existe */ } }
   return null;
 });
@@ -38,6 +41,8 @@ ipcMain.handle('mirror:save', (_event, json) => {
     atomicWrite(file, String(json)); return true;
   } catch { return false; }
 });
+ipcMain.handle('mirror:saveParts', (_event, partes, borrar) => { try { return espejo.guardarPartes(mirrorPartsDir(), partes, borrar); } catch { return false; } });
+ipcMain.handle('mirror:index', () => espejo.leerIndice(mirrorPartsDir()));
 ipcMain.handle('backup:save', (_event, name, json) => {
   try { const dir = backupDir(), file = path.join(dir, path.basename(String(name))); fs.writeFileSync(file, String(json)); pruneBackups(dir); return { ok: true, path: file }; }
   catch (error) { return { ok: false, error: String(error.message || error) }; }
@@ -48,7 +53,7 @@ ipcMain.handle('backup:chooseFolder', async () => {
   if (result.canceled || !result.filePaths[0]) return null;
   const config = readConfig(); config.backupDir = result.filePaths[0]; writeConfig(config); return config.backupDir;
 });
-ipcMain.handle('app:info', () => ({ backupDir: backupDir(), dataFile: mirrorFile(), version: app.getVersion(), platform: process.platform }));
+ipcMain.handle('app:info', () => ({ backupDir: backupDir(), dataFile: mirrorPartsDir(), version: app.getVersion(), platform: process.platform }));
 // Impresión de tickets: ventana oculta temporal con el HTML del comprobante.
 // - Solo la ventana principal del POS puede pedirla (ni la ventana de impresión ni otra).
 // - Archivo temporal con nombre aleatorio criptográfico y creación exclusiva ('wx': nunca sobrescribe ni sigue un enlace);

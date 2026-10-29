@@ -7,6 +7,8 @@
 // 5. Falla una página de ids: no se borra nada.
 // 6. Otra caja inserta mientras se pagina: no se pierde ni se borra ninguna fila existente.
 // 7. Equipo nuevo con 40.000 ventas: la mezcla usa índices por id (antes, find dentro del forEach congelaba la pestaña).
+// 8. Ventana de 90 días (storage.js): solo se piden las ventas desde historialVentanaDesde(); las anteriores no se
+//    descargan ni se borran del equipo.
 
 const assert = require('assert');
 
@@ -57,6 +59,7 @@ const mockSupabase = {
         const q = {
           eq(c, v) { filtros.push(r => r[c] === v); return q; },
           gt(c, v) { gtId = v; filtros.push(r => String(r[c]) > String(v)); return q; },
+          gte(c, v) { filtros.push(r => String(r[c]) >= String(v)); return q; },
           in(c, vs) { const set = new Set(vs); filtros.push(r => set.has(r[c])); return q; },
           order(c) { orden = c; return q; },
           limit(n) { max = n; return q; },
@@ -156,6 +159,23 @@ const resumen = tabla => log.filter(l => l.table === tabla).reduce((s, l) => ({ 
   assert.strictEqual(new Set(state.payments.map(p => p.id)).size, 40000, 'sin duplicados');
   assert(ms < 3000, `la descarga de 40.000 ventas tardó ${ms} ms`);
   ok(`equipo nuevo con 40.000 ventas: descargadas y mezcladas sin duplicados en ${(ms / 1000).toFixed(1)} s`);
+
+  // 8. Ventana de 90 días
+  global.historialVentanaDesde = () => '2026-08-01';
+  nube.ventas = [
+    ...Array.from({ length: 30 }, (_, i) => ({ ...nube.ventas[0], id: `old-${pad(i)}`, fecha: '2026-03-15T20:00:00Z' })),
+    ...Array.from({ length: 20 }, (_, i) => ({ ...nube.ventas[0], id: `new-${pad(i)}`, fecha: '2026-10-15T20:00:00Z' }))
+  ];
+  global.state = { profile: { name: 'Bar Grande', syncId: BID }, terminal: { businessId: BID }, products: [], inventory: [], categories: [], expenses: [], purchases: [], suppliers: [], stockLog: [], orders: [],
+    payments: [{ id: 'archivada-local', amount: 1000, date: '2026-03-10', sync_status: 'synced', items: [], payments: [] }] };
+  log = [];
+  r = await NexoSync.pullAllFromSupabase(BID);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(state.payments.map(p => p.id).filter(id => !id.startsWith('new-')), ['archivada-local'], 'ni se baja lo viejo ni se borra la venta vieja local');
+  assert.strictEqual(state.payments.filter(p => p.id.startsWith('new-')).length, 20);
+  assert.strictEqual(resumen('ventas').filas, 40, 'solo viajan los 20 ids y las 20 filas de la ventana');
+  delete global.historialVentanaDesde;
+  ok('ventana de 90 días: solo se descargan las ventas recientes y las viejas del equipo no se borran');
 
   console.log(`\n${pasadas} PRUEBAS SUPERADAS`);
   process.exit(0);

@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
+const espejo = require('./electron/espejo-partes.js');
 
 // Control de instancia única (evita abrir dos cajas simultáneas en la misma máquina)
 const gotLock = app.requestSingleInstanceLock();
@@ -24,6 +25,7 @@ const userDir = () => app.getPath('userData');
 const configFile = () => path.join(userDir(), 'config.json');
 const mirrorFile = () => path.join(userDir(), 'datos', 'nexobar-pos.json');
 const legacyMirrorFile = () => path.join(userDir(), 'datos', 'brasa-pos.json'); // instalaciones anteriores al cambio de nombre
+const mirrorPartsDir = () => path.join(userDir(), 'datos', 'partes'); // espejo por partes (electron/espejo-partes.js)
 const BACKUP_PATTERN = /^(nexobar|brasa)-pos-respaldo-.*\.json$/;
 const KEEP_BACKUPS = 120;
 
@@ -68,6 +70,12 @@ function pruneBackups(dir) {
 
 // Canales de comunicación segura (IPC)
 ipcMain.handle('mirror:load', () => {
+  try {
+    const partes = espejo.cargarPartes(mirrorPartsDir());
+    if (partes) return partes;
+  } catch {
+    /* espejo por partes ilegible: probar el archivo único */
+  }
   for (const file of [mirrorFile(), legacyMirrorFile()]) {
     try {
       return fs.readFileSync(file, 'utf8');
@@ -90,6 +98,17 @@ ipcMain.handle('mirror:save', (_event, json) => {
     return false;
   }
 });
+
+// Espejo por partes: solo los meses que cambiaron y el núcleo (el archivo único anterior queda como estaba)
+ipcMain.handle('mirror:saveParts', (_event, partes, borrar) => {
+  try {
+    return espejo.guardarPartes(mirrorPartsDir(), partes, borrar);
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('mirror:index', () => espejo.leerIndice(mirrorPartsDir()));
 
 ipcMain.handle('backup:save', (_event, name, json) => {
   try {
@@ -119,7 +138,7 @@ ipcMain.handle('backup:chooseFolder', async () => {
 
 ipcMain.handle('app:info', () => ({
   backupDir: backupDir(),
-  dataFile: mirrorFile(),
+  dataFile: mirrorPartsDir(),
   version: app.getVersion(),
   platform: process.platform
 }));

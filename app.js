@@ -2097,8 +2097,9 @@ function fallbackCopyText(text) {
   }
   document.body.removeChild(ta);
 }
-function exportBackup() { const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`nexobar-pos-respaldo-${today()}.json`;a.click();URL.revokeObjectURL(url);showToast('Respaldo descargado.'); }
-function importBackup(file) { const reader=new FileReader();reader.onload=()=>{try{const incoming=JSON.parse(reader.result);if(!incoming.tables||!incoming.products||!incoming.inventory)throw new Error();state=normalizeState(incoming);saveState();renderAll();afterStateReplaced();showToast('Respaldo restaurado correctamente.');}catch{showToast('El archivo de respaldo no es válido.');}};reader.readAsText(file); }
+// El respaldo lleva todo el historial: también las ventas viejas que no están en memoria (estadoCompleto en storage.js)
+async function exportBackup() { let completo=state; try{completo=await (globalThis.estadoCompleto?.()??state);}catch{showToast('⚠ No se pudo leer el historial antiguo: el respaldo solo trae los últimos meses.');} const blob=new Blob([JSON.stringify(completo,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`nexobar-pos-respaldo-${today()}.json`;a.click();URL.revokeObjectURL(url);showToast('Respaldo descargado.'); }
+function importBackup(file) { const reader=new FileReader();reader.onload=()=>{try{const incoming=JSON.parse(reader.result);if(!incoming.tables||!incoming.products||!incoming.inventory)throw new Error();globalThis.descartarArchivoHistorial?.();state=normalizeState(incoming);saveState();renderAll();afterStateReplaced();showToast('Respaldo restaurado correctamente.');}catch{showToast('El archivo de respaldo no es válido.');}};reader.readAsText(file); }
 function escapeHtml(str){return String(str).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 globalThis.escapeHtml = escapeHtml;
 
@@ -2691,7 +2692,7 @@ globalThis.reportBounds = reportBounds;
 globalThis.reportPayments = reportPayments;
 globalThis.parseISO = parseISO;
 document.addEventListener('click',e=>{const b=e.target.closest('[data-report-range]');if(!b)return;reportRange=b.dataset.reportRange;renderReports();});
-(function(){const input=document.querySelector('#reportDate');input.max=today();input.addEventListener('change',()=>{if(!input.value)return;reportDate=input.value;reportRange='date';renderReports();});})();
+(function(){const input=document.querySelector('#reportDate');input.max=today();input.addEventListener('change',()=>{if(!input.value)return;reportDate=input.value;reportRange='date';renderReports();globalThis.asegurarHistorial?.(input.value).then(n=>{if(n)renderReports();});});})();
 
 
 // ===== Menú móvil (hamburguesa) =====

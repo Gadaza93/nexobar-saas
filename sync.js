@@ -627,12 +627,31 @@ function countPendingRecords() {
   return count;
 }
 
+// Ventas, gastos y compras que solo existen en este equipo (lo que se perdería si se borran los datos del
+// navegador) y desde cuándo espera el más antiguo
+function pendingSummary() {
+  const out = { total: countPendingRecords(), registros: 0, desde: null };
+  if (typeof state === "undefined" || !state) return out;
+  for (const col of ["payments", "expenses", "purchases"]) {
+    for (const r of (Array.isArray(state[col]) ? state[col] : [])) {
+      if (!isPendingSync(r)) continue;
+      out.registros++;
+      const at = Number(r.createdAt || r.paidAt) || Date.parse(r.created_at || "") || null;
+      if (at && (out.desde === null || out.desde > at)) out.desde = at;
+    }
+  }
+  return out;
+}
+
+const PENDIENTE_VIEJO_MS = 24 * 3600 * 1000;
+let avisoPendienteViejo = false; // un aviso por sesión
 function updateIndicator(status) {
   if (isDemoMode()) {
     status = "demo";
   }
   syncState.status = status;
   syncState.pendingCount = countPendingRecords();
+  const pendientes = status === "demo" ? { registros: 0, desde: null } : pendingSummary();
 
   const sidebarInd = document.querySelector("#syncStatusIndicator");
   const sidebarLabel = document.querySelector("#syncLabel");
@@ -671,6 +690,17 @@ function updateIndicator(status) {
     labelText = "Modo Offline";
     topbarText = "Modo Offline";
     tooltip = "Modo sin conexión. El sistema opera 100% local sin riesgo.";
+  }
+  // Sin conexión o sin sesión con registros por subir: cuántos y desde cuándo (si se borra el navegador se pierden)
+  if ((status === "offline" || status === "auth") && pendientes.registros > 0) {
+    const n = pendientes.registros, desde = pendientes.desde ? new Date(pendientes.desde).toLocaleString("es-CO") : "";
+    labelText += ` · ${n} sin subir`;
+    if (status === "offline") tooltip = "Modo sin conexión: la caja sigue vendiendo.";
+    tooltip += ` ${n} ${n === 1 ? "registro está" : "registros están"} solo en este equipo${desde ? ` (el más antiguo desde ${desde})` : ""}. No borres los datos del navegador hasta que se suban.`;
+    if (!avisoPendienteViejo && pendientes.desde && Date.now() - pendientes.desde > PENDIENTE_VIEJO_MS && typeof showToast === "function") {
+      avisoPendienteViejo = true;
+      showToast(`⚠ Hay ${n} ${n === 1 ? "registro" : "registros"} sin subir a la nube desde hace más de un día. Conecta la caja a internet o descarga un respaldo.`);
+    }
   }
 
   if (sidebarInd) {
@@ -1721,11 +1751,12 @@ const syncData = syncAll;
 const PULL_PAGE_SIZE = 1000;
 const PULL_IN_CHUNK = 150; // ids por consulta .in(): mantiene la URL corta
 
-async function fetchAllRows(sb, table, bId, columns = "*") {
+async function fetchAllRows(sb, table, bId, columns = "*", desde = null) {
   const rows = [];
   let lastId = null;
   for (;;) {
     let query = sb.from(table).select(columns).eq("business_id", bId);
+    if (desde) query = query.gte("fecha", desde);
     if (lastId !== null) query = query.gt("id", lastId);
     const { data, error } = await query.order("id", { ascending: true }).limit(PULL_PAGE_SIZE);
     if (error || !Array.isArray(data)) return { rows, complete: false, error: error || new Error("Respuesta inválida") };
@@ -1748,8 +1779,9 @@ async function fetchRowsByIds(sb, table, bId, ids) {
 // Tablas que crecen sin parar (ventas, gastos, mermas): primero solo la lista de ids y después, completas,
 // únicamente las filas que este equipo no tiene. No depende de los relojes de las cajas.
 // remoteIds solo viene si la lista de ids llegó completa: sin ella no se debe borrar nada localmente.
-async function fetchMissingRows(sb, table, bId, knownIds) {
-  const manifest = await fetchAllRows(sb, table, bId, "id");
+// desde ('AAAA-MM-DD'): solo las filas con fecha desde ese día (las ventas viejas quedan en la nube y en el archivo local).
+async function fetchMissingRows(sb, table, bId, knownIds, desde = null) {
+  const manifest = await fetchAllRows(sb, table, bId, "id", desde);
   if (!manifest.complete) return { rows: [], remoteIds: null, error: manifest.error };
   const remoteIds = manifest.rows.map(r => String(r.id));
   const fetched = await fetchRowsByIds(sb, table, bId, remoteIds.filter(id => !knownIds.has(id)));
@@ -1990,13 +2022,17 @@ async function pullAllFromSupabase(businessId) {
     try {
       if (typeof state !== "undefined" && state && !Array.isArray(state.payments)) state.payments = [];
       const knownSaleIds = new Set([...(st?.payments || []).map(p => String(p.id)), ...deletedSaleIds.map(String)]);
-      const { rows: salesData, remoteIds: remoteSaleIds, error: salesErr } = await fetchMissingRows(sb, "ventas", bId, knownSaleIds);
+      // Solo la ventana que la caja mantiene en memoria (storage.js): las ventas anteriores ya están en el archivo
+      // local o, en un equipo nuevo, se quedan en la nube. Sin storage.js (pruebas de Node) se descarga todo.
+      const ventanaVentas = typeof historialVentanaDesde === "function" ? historialVentanaDesde() : null;
+      const { rows: salesData, remoteIds: remoteSaleIds, error: salesErr } = await fetchMissingRows(sb, "ventas", bId, knownSaleIds, ventanaVentas);
       if (salesErr) console.warn("[NexoSync] Error descargando ventas:", salesErr.message);
       if (remoteSaleIds) {
         if (typeof state !== "undefined" && state) {
           // Eliminar localmente las ventas que fueron borradas en Supabase (si no estan pendientes).
           // Solo con la lista de ids completa: una lista parcial borraría ventas que sí existen.
-          state.payments = state.payments.filter(p => isPendingSync(p) || remoteSaleIds.has(String(p.id)));
+          // Una venta anterior a la ventana no viene en la lista: no se toca
+          state.payments = state.payments.filter(p => isPendingSync(p) || remoteSaleIds.has(String(p.id)) || (ventanaVentas && !(p.date >= ventanaVentas)));
           state.payments.forEach(p => {
             if (remoteSaleIds.has(String(p.id))) { p.sync_status = "synced"; p.synced = true; }
           });
@@ -2650,6 +2686,7 @@ rootScope.NexoSync = {
   getBusinessId,
   getStatus: () => ({ ...syncState }),
   getPendingCount: countPendingRecords,
+  pendingSummary,
   stockItemsQty,
   addSaleStockDelta,
   syncStockMovements,

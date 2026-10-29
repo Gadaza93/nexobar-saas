@@ -1414,8 +1414,9 @@ function handleModuleChange(event) {
   if (t.id === 'floorItemZone') { if (updateFloorSelected({ zone: t.value })) renderFloorDesigner(); }
   if (t.dataset.invTender !== undefined && t.dataset.invTenderField === 'method' && invoiceDraft) { const tender = invoiceDraft.tenders[Number(t.dataset.invTender)]; if (tender) tender.method = t.value; }
   if (t.id === 'wasteItem') updateWasteValue();
-  if (t.id === 'invoiceDate') { invoiceFilter.date = t.value || 'all'; renderInvoices(); }
-  if ((t.id === 'netFrom' || t.id === 'netTo') && t.value) { if (t.id === 'netFrom') netFrom = t.value; else netTo = t.value; netRange = 'custom'; renderNetProfit(); }
+  // Fecha anterior a la ventana en memoria (o «todas»): se traen los meses archivados y se vuelve a dibujar
+  if (t.id === 'invoiceDate') { invoiceFilter.date = t.value || 'all'; renderInvoices(); globalThis.asegurarHistorial?.(t.value || '').then(n => { if (n) renderInvoices(); }); }
+  if ((t.id === 'netFrom' || t.id === 'netTo') && t.value) { if (t.id === 'netFrom') netFrom = t.value; else netTo = t.value; netRange = 'custom'; renderNetProfit(); globalThis.asegurarHistorial?.(netBounds().from).then(n => { if (n) renderNetProfit(); }); }
   if (t.id === 'invoiceMethod') { invoiceFilter.method = t.value; renderInvoices(); }
   if (t.id === 'backupOnClose' || t.id === 'backupDaily') { if (!can('backup')) { renderBackupCard(); return deny(); } const s = backupSettings(); s[t.id === 'backupOnClose' ? 'onClose' : 'daily'] = t.checked; saveState(); showToast('Preferencia de respaldo guardada.'); }
 }

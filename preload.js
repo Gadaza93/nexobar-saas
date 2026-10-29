@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('desktop', {
   isDesktop: true,
   loadMirror: () => ipcRenderer.invoke('mirror:load'),
   saveMirror: json => ipcRenderer.invoke('mirror:save', json),
+  saveMirrorParts: (partes, borrar) => ipcRenderer.invoke('mirror:saveParts', partes, borrar),
+  mirrorIndex: () => ipcRenderer.invoke('mirror:index'),
   saveBackup: (name, json) => ipcRenderer.invoke('backup:save', name, json),
   openBackupFolder: () => ipcRenderer.invoke('backup:openFolder'),
   chooseBackupFolder: () => ipcRenderer.invoke('backup:chooseFolder'),

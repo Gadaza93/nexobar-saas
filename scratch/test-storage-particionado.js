@@ -6,6 +6,9 @@
 // 4. Una edición en el lugar que no cambia el resumen se guarda si se marca o en la revisión completa.
 // 5. Un mes que queda vacío se borra; un estado antiguo (sin partir) se carga y se parte al guardar.
 // 6. Rendimiento con 55.000 ventas: cuánto se copia en cada guardado.
+// 7. Ventana de 90 días: los meses viejos sin pendientes quedan solo en IndexedDB, nunca se borran, entran en los
+//    respaldos y se traen al consultarlos o cuando les llega un registro; restaurar un respaldo los reemplaza.
+// 8. Espejo de Windows por partes: solo lo que cambió, incluye los meses archivados y se rearma completo.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -43,6 +46,7 @@ require('../demo-mode.js');
 vm.runInThisContext(fs.readFileSync(path.join(__dirname, '..', 'storage.js'), 'utf8'), { filename: 'storage.js' });
 const interno = expr => vm.runInThisContext(expr);
 vm.runInThisContext('storageReady = true');
+vm.runInThisContext('histVentanaDias = 100000'); // pruebas 1 a 6: todo el historial en memoria (la ventana se prueba en la 7)
 
 const hoy = new Date(), mesActual = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
 const venta = (id, date, extra = {}) => ({ id, date, amount: 10000, method: 'Efectivo', items: [{ name: 'Cerveza', qty: 2, price: 5000 }], sync_status: 'synced', ...extra });
@@ -132,6 +136,83 @@ const ok = msg => { pasadas++; console.log(`  ✓ ${msg}`); };
   assert(parcial * 5 < completo, `cada guardado copia mucho menos que el estado entero (${parcial} vs ${completo})`);
   t = performance.now(); structuredClone(state); const msAntes = performance.now() - t;
   ok(`55.000 ventas: cada guardado copia ${(parcial / 1048576).toFixed(1)} MB de ${(completo / 1048576).toFixed(1)} MB (antes: copia completa, ${msAntes.toFixed(0)} ms aquí; ahora ${ms.toFixed(0)} ms con la revisión de resúmenes)`);
+
+  // 7. Ventana de 90 días
+  vm.runInThisContext('histVentanaDias = 90');
+  const mesHace = n => { const d = new Date(hoy.getFullYear(), hoy.getMonth() - n, 10); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const viejo = mesHace(8), viejoPend = mesHace(6), reciente = mesHace(1);
+  db.clear(); vm.runInThisContext('histGuardado = {}; histArchivo = {}');
+  global.state = {
+    profile: { name: 'Bar' }, products: [], orders: [], expenses: [{ id: 'gv', date: `${viejo}-02`, amount: 1, sync_status: 'synced' }], purchases: [],
+    payments: [venta('o1', `${viejo}-03`), venta('o2', `${viejo}-04`), venta('p1', `${viejoPend}-05`, { sync_status: 'pending' }), venta('r1', `${reciente}-06`), venta('h1', `${mesActual}-01`)]
+  };
+  await interno('persistNow')();
+  global.state = await interno('storageInit')();
+  assert.deepStrictEqual(state.payments.map(p => p.id).sort(), ['h1', 'p1', 'r1'], 'el mes viejo sin pendientes queda fuera; el que tiene una venta sin subir se carga');
+  assert.strictEqual(state.expenses.length, 1, 'los gastos no se archivan');
+  assert.strictEqual(interno('historialArchivado')(), true);
+  assert(interno('historialVentanaDesde')() > `${viejo}-31`);
+  await interno('persistNow')();
+  assert(db.has(`hist:payments:${viejo}`) && db.get('state').__historial.includes(`hist:payments:${viejo}`), 'el mes archivado no se borra ni sale del núcleo');
+  assert(!ultimoLote().escritas.includes(`hist:payments:${viejo}`), 'ni se reescribe');
+  const respaldo = await interno('estadoCompleto')();
+  assert.deepStrictEqual(respaldo.payments.map(p => p.id), ['o1', 'o2', 'p1', 'r1', 'h1'], 'el respaldo lleva todo, en orden');
+  assert.strictEqual(state.payments.length, 3, 'el respaldo no deja lo viejo en memoria');
+  assert.strictEqual(await interno('asegurarHistorial')(`${reciente}-01`), 0, 'una fecha dentro de la ventana no trae nada');
+  assert.strictEqual(await interno('asegurarHistorial')(`${viejo}-15`), 2, 'una fecha vieja trae su mes');
+  assert.deepStrictEqual(state.payments.map(p => p.id), ['o1', 'o2', 'p1', 'r1', 'h1']);
+  assert.strictEqual(interno('historialArchivado')(), false);
+  assert.strictEqual(await interno('asegurarHistorial')(''), 0, 'sin meses archivados no hace nada');
+  ok('ventana de 90 días: lo viejo queda en el equipo, entra en los respaldos y se trae al consultarlo');
+
+  global.state = await interno('storageInit')();
+  state.payments.push(venta('o3', `${viejo}-20`)); // llega por tiempo real una venta editada de un mes archivado
+  await interno('persistNow')();
+  assert.deepStrictEqual(db.get(`hist:payments:${viejo}`).registros.map(p => p.id).sort(), ['o1', 'o2', 'o3'], 'el mes se trae entero antes de guardarlo: no se pierde lo archivado');
+  global.state = await interno('storageInit')();
+  assert(interno('historialArchivado')(), 'sin pendientes, el mes vuelve al archivo en el siguiente arranque');
+  interno('descartarArchivoHistorial')(); // restaurar un respaldo que no trae los meses viejos
+  global.state = { ...state, payments: state.payments.filter(p => p.date >= `${reciente}-01`) };
+  await interno('persistNow')();
+  assert(!db.has(`hist:payments:${viejo}`) && !db.has(`hist:payments:${viejoPend}`), 'restaurar un respaldo reemplaza también lo archivado');
+  ok('un registro que llega a un mes archivado lo trae entero; restaurar un respaldo reemplaza lo archivado');
+
+  // 8. Espejo de Windows por partes
+  const os = require('os'), espejo = require('../electron/espejo-partes.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexobar-espejo-'));
+  let llamadas = [];
+  global.desktop = {
+    saveMirror: async json => { llamadas.push(['completo', JSON.parse(json)]); return true; },
+    saveMirrorParts: async (partes, borrar) => { llamadas.push(['partes', partes.map(p => p[0]), borrar]); return espejo.guardarPartes(dir, structuredClone(partes), borrar); },
+    mirrorIndex: async () => espejo.leerIndice(dir)
+  };
+  db.clear(); vm.runInThisContext('histGuardado = {}; histArchivo = {}; mirrorIndice = null; mirrorPendiente.clear(); mirrorBorrar.clear()');
+  global.state = { profile: { name: 'Bar' }, products: [], orders: [], expenses: [], purchases: [], payments: [venta('o1', `${viejo}-03`), venta('r1', `${reciente}-06`), venta('h1', `${mesActual}-01`)] };
+  await interno('persistNow')();
+  global.state = await interno('storageInit')(); // o1 queda archivado
+  vm.runInThisContext('mirrorIndice = null; mirrorPendiente.clear()'); // primera escritura del espejo en esta sesión
+  await interno('flushAll')();
+  const primera = llamadas.filter(l => l[0] === 'partes').pop();
+  assert.deepStrictEqual([...primera[1]].sort(), ['state', `hist:payments:${viejo}`, `hist:payments:${reciente}`, `hist:payments:${mesActual}`].sort(), 'la primera vez completa el disco, también lo archivado');
+  assert.strictEqual(primera[1][primera[1].length - 1], 'state', 'el núcleo va al final');
+  llamadas = [];
+  state.payments.push(venta('h2', `${mesActual}-02`));
+  await interno('flushAll')();
+  assert.deepStrictEqual(llamadas.filter(l => l[0] === 'partes').pop()[1], [`hist:payments:${mesActual}`, 'state'], 'después solo lo que cambió');
+  assert(!llamadas.some(l => l[0] === 'completo'), 'ya no serializa el estado entero');
+  const rearmado = JSON.parse(espejo.cargarPartes(dir));
+  assert.deepStrictEqual(rearmado.payments.map(p => p.id), ['o1', 'r1', 'h1', 'h2'], 'se rearma completo para restaurar');
+  assert(!('__historial' in rearmado) && rearmado.profile.name === 'Bar');
+  interno('descartarArchivoHistorial')();
+  state.payments = state.payments.filter(p => p.date >= `${mesActual}-01`);
+  await interno('flushAll')();
+  assert(!fs.existsSync(espejo.archivoDe(dir, `hist:payments:${reciente}`)), 'un mes borrado también se borra del espejo');
+  delete global.desktop.saveMirrorParts; llamadas = [];
+  await interno('flushAll')();
+  assert.strictEqual(llamadas[0][0], 'completo', 'con un preload anterior se escribe el archivo único');
+  delete global.desktop;
+  fs.rmSync(dir, { recursive: true, force: true });
+  ok('espejo de Windows por partes: completa lo que falta, luego solo lo que cambió, y se rearma completo');
 
   console.log(`\n${pasadas} PRUEBAS SUPERADAS`);
   process.exit(0);
