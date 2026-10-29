@@ -2365,27 +2365,88 @@ function relinkTerminal() {
   return showActivation({ relink: true });
 }
 
-/* ---------- Suscripción del negocio (negocios.activo) ----------
-   Con activo=false el POS queda bloqueado por un modal que no se puede cerrar. El estado se guarda
-   (state.subscription) para que el bloqueo siga aunque la caja reinicie sin internet. */
+/* ---------- Suscripción del negocio (negocios.activo y fecha_vencimiento) ----------
+   Con activo=false el POS queda bloqueado por un modal que no se puede cerrar (en la nube, la tarea
+   nexobar-suspender-vencidos lo pone en false a los 3 días de vencido). El estado se guarda (state.subscription)
+   para que el bloqueo siga aunque la caja reinicie sin internet.
+   Reloj de la licencia: en cada descarga se guarda la hora del servidor (hora_servidor) y su diferencia con el reloj
+   local. Sin internet, el vencimiento se mide con esa hora corregida. Si el reloj del equipo retrocede más de 1 h
+   respecto al máximo visto, o pasan LICENCIA_OFFLINE_MS sin verificar, se bloquea hasta volver a verificar en línea.
+   Una caja que aún no tiene hora del servidor (SQL sin aplicar) solo se bloquea por activo=false. */
+const LICENCIA_GRACIA_MS = 3 * 86400000, LICENCIA_OFFLINE_MS = 7 * 86400000;
+const RELOJ_TOLERANCIA_MS = 3600000, RELOJ_GUARDADO_MS = 600000;
 function isSubscriptionSuspended() { return !isDemoMode() && state?.subscription?.active === false; }
-function enforceSubscription() {
+function registerLicenseCheck(serverNow, local = Date.now()) {
+  if (isDemoMode() || !state || !Number.isFinite(serverNow)) return;
+  state.subscription = { ...(state.subscription || {}), verifiedAt: serverNow, offsetMs: serverNow - local, localMax: local };
+  scheduleSave();
+  enforceSubscription();
+}
+// Hora efectiva de la licencia: nunca menor que la última verificación. tampered = el reloj local retrocedió
+function licenseClock(now = Date.now()) {
+  const sub = state?.subscription;
+  if (!sub || !Number.isFinite(sub.verifiedAt)) return null;
+  const localMax = Number(sub.localMax) || 0, offset = Number(sub.offsetMs) || 0;
+  if (now < localMax - RELOJ_TOLERANCIA_MS) return { tampered: true, now: Math.max(sub.verifiedAt, localMax + offset) };
+  if (now > localMax + RELOJ_GUARDADO_MS) { sub.localMax = now; scheduleSave(); }
+  return { tampered: false, now: Math.max(now + offset, sub.verifiedAt) };
+}
+// Motivo del bloqueo: 'suspendida' | 'vencida' | 'reloj' | 'sin-verificar' | null
+function licenseBlockReason(now = Date.now()) {
+  if (isDemoMode() || !state?.subscription) return null;
+  const sub = state.subscription, expires = sub.expiresAt ? Date.parse(sub.expiresAt) : NaN, clock = licenseClock(now);
+  if (sub.active === false) return Number.isFinite(expires) && expires < (clock?.now ?? now) ? 'vencida' : 'suspendida';
+  if (!clock) return null;
+  if (clock.tampered) return 'reloj';
+  if (Number.isFinite(expires) && clock.now > expires + LICENCIA_GRACIA_MS) return 'vencida';
+  if (clock.now - sub.verifiedAt > LICENCIA_OFFLINE_MS) return 'sin-verificar';
+  return null;
+}
+const hasOpenAccounts = () => (state?.orders || []).some(o => o && !['paid', 'closed', 'cerrada', 'cancelada'].includes(String(o.status || '').toLowerCase())
+  && Array.isArray(o.items) && o.items.some(i => (Number(i.qty) || 0) > 0));
+const SUSPENDED_TEXTS = {
+  suspendida: ['Cuenta suspendida', 'Suscripción suspendida', 'Suscripción suspendida. ', 'Comunícate con soporte para reactivar tu cuenta.'],
+  vencida: ['Licencia vencida', 'Tu suscripción venció', '', 'Renueva tu plan o comunícate con soporte para seguir usando NexoBar.'],
+  reloj: ['Revisa la hora', 'La hora de este equipo cambió', 'La fecha u hora de este equipo está atrasada respecto a la última verificación. ', 'Corrige la hora y conéctate a internet para verificar tu licencia.'],
+  'sin-verificar': ['Verificación pendiente', 'Conéctate a internet', `Esta caja lleva más de ${LICENCIA_OFFLINE_MS / 86400000} días sin verificar la licencia. `, 'Conéctate a internet y toca Verificar.'],
+};
+function renderSuspended(reason) {
+  const [badge, title, text, strong] = SUSPENDED_TEXTS[reason] || SUSPENDED_TEXTS.suspendida;
+  const expires = state.subscription?.expiresAt ? new Date(state.subscription.expiresAt) : null;
+  const lead = reason === 'vencida' && expires && !Number.isNaN(expires.getTime()) ? `Tu plan venció el ${subscriptionDateFmt.format(expires)}. ` : text;
+  document.querySelector('#suspendedBadge').textContent = badge;
+  document.querySelector('#suspendedTitle').textContent = title;
+  const message = document.querySelector('#suspendedMessage'), bold = document.createElement('strong');
+  bold.textContent = strong; message.replaceChildren(lead, bold);
+  document.querySelector('#suspendedRetry').textContent = reason === 'suspendida' || reason === 'vencida' ? 'Ya la reactivé · Verificar de nuevo' : 'Verificar ahora';
+}
+// startup: al arrancar se bloquea siempre. En uso, lo que detecta el equipo (vencida sin suspensión en la nube, reloj,
+// sin verificar) espera a que no haya cuentas abiertas: no corta un servicio a medias. activo=false bloquea en el acto.
+function enforceSubscription({ startup = false } = {}) {
   const dialog = typeof document !== 'undefined' && document.querySelector('#suspendedDialog'); if (!dialog) return;
-  if (!isSubscriptionSuspended()) {
+  const reason = licenseBlockReason();
+  if (!reason) {
     if (!dialog.open) return;
-    dialog.close(); if (!session) showLogin(); else showToast('Suscripción reactivada. ¡Bienvenido de nuevo!');
+    dialog.close(); if (!session) showLogin(); else showToast('Licencia verificada. ¡Bienvenido de nuevo!');
     return;
   }
+  renderSuspended(reason);
+  if (dialog.open) return;
+  if (!startup && !isSubscriptionSuspended() && hasOpenAccounts()) return;
   document.querySelectorAll('dialog[open]').forEach(d => { if (d !== dialog) d.close(); });
-  if (!dialog.open) dialog.showModal();
+  dialog.showModal();
 }
 async function retrySubscriptionCheck() {
   const button = document.querySelector('#suspendedRetry'), note = document.querySelector('#suspendedNote');
+  const fail = 'No se pudo verificar. Revisa la conexión a internet.';
   button.disabled = true; note.textContent = 'Verificando el estado de tu cuenta…';
   try {
+    // Sin sesión de sincronización no se puede verificar: primero se vuelve a vincular la caja (mismo negocio)
+    if (navigator.onLine && !(await NexoSync.hasAuthSession())) { note.textContent = 'La sesión de esta caja venció: vuelve a vincularla para verificar.'; await showActivation({ relink: true }); }
     const res = await NexoSync.pullAllFromSupabase();
-    note.textContent = !res?.ok ? 'No se pudo verificar. Revisa la conexión a internet.' : isSubscriptionSuspended() ? 'Tu cuenta sigue suspendida.' : '';
-  } catch { note.textContent = 'No se pudo verificar. Revisa la conexión a internet.'; }
+    const reason = licenseBlockReason();
+    note.textContent = !res?.ok ? fail : reason === 'suspendida' ? 'Tu cuenta sigue suspendida.' : reason === 'vencida' ? 'Tu suscripción sigue vencida.' : reason ? fail : '';
+  } catch { note.textContent = fail; }
   button.disabled = false;
 }
 if (typeof document !== 'undefined' && typeof document.querySelector === 'function' && !globalThis.__IS_NODE_TEST__) {
@@ -2393,6 +2454,7 @@ if (typeof document !== 'undefined' && typeof document.querySelector === 'functi
   if (suspended) {
     suspended.addEventListener('cancel', e => e.preventDefault());
     document.querySelector('#suspendedRetry').addEventListener('click', retrySubscriptionCheck);
+    document.querySelector('#suspendedBackup').addEventListener('click', exportBackup);
   }
 }
 /* ---------- Licencia en Mi negocio y aviso preventivo de vencimiento ----------
@@ -2415,7 +2477,7 @@ function subscriptionInfo(sub, now = Date.now()) {
 }
 function renderSubscription() {
   if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
-  const info = subscriptionInfo(isDemoMode() ? null : state?.subscription);
+  const info = subscriptionInfo(isDemoMode() ? null : state?.subscription, licenseClock()?.now ?? Date.now());
   const badge = document.querySelector('#subscriptionStatus');
   if (badge) {
     badge.textContent = isDemoMode() ? 'Demostración' : !info.known ? 'Sin datos' : info.active ? 'Licencia activa' : 'Suspendida';
@@ -2433,6 +2495,8 @@ function renderSubscription() {
 globalThis.renderSubscription = renderSubscription;
 globalThis.subscriptionInfo = subscriptionInfo;
 globalThis.enforceSubscription = enforceSubscription;
+globalThis.registerLicenseCheck = registerLicenseCheck;
+globalThis.licenseBlockReason = licenseBlockReason;
 globalThis.relinkTerminal = relinkTerminal;
 
 /* Sincronización al arrancar: PRIMERO se sube lo pendiente (ventas, pedidos, gastos…) y solo con la cola vacía se
@@ -2522,11 +2586,11 @@ async function bootstrap() {
   try {
     renderAll();
     initModules();
-    enforceSubscription(); // suscripción suspendida (guardada o recién descargada): bloquea el POS
+    enforceSubscription({ startup: true }); // suspendida, vencida, reloj atrasado o sin verificar: bloquea el POS
     revealApp(); // terminal validada y estado real ya pintado: recién ahora se ve el POS
     startBackupSchedule();
     if (globalThis.NexoSync?.init) globalThis.NexoSync.init();
-    setInterval(() => { renderSubscription(); if (document.visibilityState === 'visible' && !document.querySelector('dialog[open]')) renderTables(); }, 60000); // el aviso de vencimiento cuenta los días sin recargar
+    setInterval(() => { renderSubscription(); enforceSubscription(); if (document.visibilityState === 'visible' && !document.querySelector('dialog[open]')) renderTables(); }, 60000); // el aviso de vencimiento cuenta los días sin recargar
   }
   catch (error) {
     console.error(error);

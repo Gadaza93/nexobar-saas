@@ -159,6 +159,7 @@ function completeLogin(user) {
   loginTarget = null; loginPin = ''; document.querySelector('#loginDialog').close();
   applyPermissions(); renderAll(); showView('pos'); showToast(`Hola, ${user.name}.`);
   if (user.mustChangePin) openPinDialog(true);
+  if (typeof enforceSubscription === 'function') enforceSubscription(); // licencia vencida o sin verificar (sin cuentas abiertas)
 }
 /* ---------- ¿Olvidaste tu PIN? ----------
    Solo el PIN de administrador se restablece aquí, y solo con la contraseña maestra del negocio (verificada en Supabase,

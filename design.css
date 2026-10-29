@@ -159,6 +159,7 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 .obsidian-icon-glow.is-danger { color: var(--danger); border-color: var(--danger); background: radial-gradient(circle, rgba(239, 68, 68, 0.25) 0%, rgba(239, 68, 68, 0.05) 70%); box-shadow: 0 0 24px rgba(239, 68, 68, 0.22); }
 .suspended-note { margin: 0; min-height: 16px; font-size: 12px; color: var(--muted); }
 .suspended-dialog #suspendedRetry:disabled { opacity: .6; cursor: progress; }
+.suspended-dialog .suspended-backup { width: 100%; }
 
 @media (max-width: 900px) { .stats-grid { grid-auto-flow: row; grid-template-columns: 1fr 1fr; } .stat-card + .stat-card { border-left: 0; } .stat-card:nth-child(even) { border-left: 1px solid var(--line); } .stat-card:nth-child(n+3) { border-top: 1px solid var(--line); } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

@@ -806,7 +806,7 @@
     <dialog id="suspendedDialog" class="small-dialog obsidian-modal suspended-dialog" aria-labelledby="suspendedTitle">
       <div class="obsidian-modal-header">
         <div>
-          <span class="obsidian-badge is-danger">Cuenta suspendida</span>
+          <span id="suspendedBadge" class="obsidian-badge is-danger">Cuenta suspendida</span>
           <h2 id="suspendedTitle" class="obsidian-title">Suscripción suspendida</h2>
         </div>
       </div>
@@ -814,10 +814,11 @@
         <div class="obsidian-icon-glow is-danger">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1a5 5 0 0 0-5 5v4H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5zm-3 9V6a3 3 0 0 1 6 0v4H9z"/></svg>
         </div>
-        <p class="obsidian-message">Suscripción suspendida. <strong>Comunícate con soporte para reactivar tu cuenta.</strong></p>
+        <p id="suspendedMessage" class="obsidian-message">Suscripción suspendida. <strong>Comunícate con soporte para reactivar tu cuenta.</strong></p>
         <p class="obsidian-message suspended-note">Tus datos están guardados en este equipo y no se han borrado.</p>
         <div class="obsidian-actions">
           <button id="suspendedRetry" type="button" class="obsidian-close-btn">Ya la reactivé · Verificar de nuevo</button>
+          <button id="suspendedBackup" type="button" class="outline-button suspended-backup">Descargar respaldo de mis datos</button>
           <p id="suspendedNote" class="suspended-note" role="status"></p>
         </div>
       </div>

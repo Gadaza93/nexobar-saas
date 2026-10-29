@@ -254,6 +254,18 @@ async function signOutTerminal() {
   try { await sb.auth.signOut({ scope: "local" }); } catch (err) { /* sin conexión: el token se descarta igual */ }
 }
 
+// Hora del servidor (función hora_servidor): base del reloj de la licencia (licenseClock en app.js).
+// Sin la función (SQL sin aplicar) o con error devuelve null y la licencia sigue como antes.
+async function fetchServerTime(sb) {
+  try {
+    const { data, error } = await sb.rpc("hora_servidor");
+    const t = !error && data ? Date.parse(data) : NaN;
+    return Number.isFinite(t) ? t : null;
+  } catch (err) {
+    return null;
+  }
+}
+
 // Licencia leída de la fila de negocios (activo, plan, fecha_vencimiento). Se guarda en el estado para
 // que el bloqueo y los avisos sigan aunque la caja reinicie sin internet; solo una descarga la actualiza.
 // Las columnas ausentes no cambian lo guardado.
@@ -1592,6 +1604,8 @@ async function pullAllFromSupabase(businessId) {
       const { data: negData, error: negErr } = await sb.from("negocios").select("*").eq("id", bId).maybeSingle();
       if (!negErr && negData) {
         applySubscriptionStatus(negData);
+        const serverNow = await fetchServerTime(sb);
+        if (serverNow && typeof registerLicenseCheck === "function") registerLicenseCheck(serverNow);
         if (typeof state !== "undefined" && state) {
           const localFloorPlan = state.profile?.floorPlan; // antes de mezclar: la configuración remota trae su propio floorPlan
           const { orders: _pedidosEnConfig, ...configSinPedidos } = negData.configuracion || {}; // los pedidos no van al perfil
@@ -1799,11 +1813,14 @@ async function pullAllFromSupabase(businessId) {
             if (remoteSaleIds.has(String(p.id))) { p.sync_status = "synced"; p.synced = true; }
           });
 
+          // Índices por id: con miles de ventas, buscar con find/includes dentro del forEach congela la pestaña
+          const deletedSales = new Set(deletedSaleIds.map(String));
+          const salesById = new Map(state.payments.map(p => [String(p.id), p]));
           salesData.forEach(v => {
-            if (deletedSaleIds.includes(String(v.id))) {
+            if (deletedSales.has(String(v.id))) {
               return; // Ignorar venta eliminada localmente
             }
-            const existingSale = state.payments.find(p => p.id === v.id);
+            const existingSale = salesById.get(String(v.id));
             if (existingSale) {
               existingSale.sync_status = "synced";
               existingSale.synced = true;
@@ -1827,6 +1844,7 @@ async function pullAllFromSupabase(businessId) {
                 sync_status: "synced",
                 synced: true
               });
+              salesById.set(String(v.id), state.payments[state.payments.length - 1]);
             }
           });
           results.ventas = salesData.length; // filas nuevas descargadas (las ya conocidas solo viajan como id)
@@ -1846,12 +1864,15 @@ async function pullAllFromSupabase(businessId) {
           if (!Array.isArray(state.expenses)) state.expenses = [];
           if (!Array.isArray(state.purchases)) state.purchases = [];
 
+          const purchaseIds = new Set(state.purchases.map(p => String(p.id)));
+          const expenseIds = new Set(state.expenses.map(e => String(e.id)));
           gastosData.forEach(g => {
             const isPurchase = Boolean(g.proveedor_id || String(g.id).startsWith("pur-") || String(g.categoria).startsWith("Compra"));
             const parsedDate = g.fecha ? String(g.fecha).slice(0, 10) : (typeof today === "function" ? today() : new Date().toISOString().slice(0, 10));
 
             if (isPurchase) {
-              if (!state.purchases.some(p => p.id === g.id)) {
+              if (!purchaseIds.has(String(g.id))) {
+                purchaseIds.add(String(g.id));
                 state.purchases.push({
                   id: String(g.id),
                   invoice: String(g.comprobante || ""),
@@ -1868,7 +1889,8 @@ async function pullAllFromSupabase(businessId) {
                 });
               }
             } else {
-              if (!state.expenses.some(e => e.id === g.id)) {
+              if (!expenseIds.has(String(g.id))) {
+                expenseIds.add(String(g.id));
                 state.expenses.push({
                   id: String(g.id),
                   category: String(g.categoria || "Gasto operativo"),
@@ -1939,8 +1961,10 @@ async function pullAllFromSupabase(businessId) {
       if (mermaData.length > 0) {
         if (typeof state !== "undefined" && state) {
           if (!Array.isArray(state.stockLog)) state.stockLog = [];
+          const stockLogIds = new Set(state.stockLog.map(l => String(l.id)));
           mermaData.forEach(m => {
-            if (!state.stockLog.some(l => l.id === m.id)) {
+            if (!stockLogIds.has(String(m.id))) {
+              stockLogIds.add(String(m.id));
               const parsedDate = m.fecha ? String(m.fecha).slice(0, 10) : (typeof today === "function" ? today() : new Date().toISOString().slice(0, 10));
               state.stockLog.push({
                 id: String(m.id),

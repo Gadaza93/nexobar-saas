@@ -6,6 +6,7 @@
 // 4. Borrado remoto: se elimina localmente; una venta pendiente de subir se conserva.
 // 5. Falla una página de ids: no se borra nada.
 // 6. Otra caja inserta mientras se pagina: no se pierde ni se borra ninguna fila existente.
+// 7. Equipo nuevo con 40.000 ventas: la mezcla usa índices por id (antes, find dentro del forEach congelaba la pestaña).
 
 const assert = require('assert');
 
@@ -56,7 +57,7 @@ const mockSupabase = {
         const q = {
           eq(c, v) { filtros.push(r => r[c] === v); return q; },
           gt(c, v) { gtId = v; filtros.push(r => String(r[c]) > String(v)); return q; },
-          in(c, vs) { filtros.push(r => vs.includes(r[c])); return q; },
+          in(c, vs) { const set = new Set(vs); filtros.push(r => set.has(r[c])); return q; },
           order(c) { orden = c; return q; },
           limit(n) { max = n; return q; },
           maybeSingle: () => Promise.resolve({ data: ejecutar().data?.[0] || null, error: null }),
@@ -143,6 +144,18 @@ const resumen = tabla => log.filter(l => l.table === tabla).reduce((s, l) => ({ 
   await NexoSync.pullAllFromSupabase(BID);
   assert(state.payments.some(p => p.id === 'pay-00000a'), 'la inserción anterior al cursor llega en la siguiente descarga');
   ok('inserciones durante la paginación: no se pierde ni se borra nada; lo nuevo llega en esta o en la siguiente descarga');
+
+  // 7. Equipo nuevo con historial grande
+  nube.ventas = Array.from({ length: 40000 }, (_, i) => ({ ...nube.ventas[0], id: `big-${String(i).padStart(6, '0')}`, order_id: `ord-big-${i}` }));
+  global.state = { profile: { name: 'Bar Grande', syncId: BID }, terminal: { businessId: BID }, products: [], inventory: [], categories: [], payments: [], expenses: [], purchases: [], suppliers: [], stockLog: [], orders: [] };
+  const t0 = Date.now();
+  r = await NexoSync.pullAllFromSupabase(BID);
+  const ms = Date.now() - t0;
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(state.payments.length, 40000, `ventas: ${state.payments.length}`);
+  assert.strictEqual(new Set(state.payments.map(p => p.id)).size, 40000, 'sin duplicados');
+  assert(ms < 3000, `la descarga de 40.000 ventas tardó ${ms} ms`);
+  ok(`equipo nuevo con 40.000 ventas: descargadas y mezcladas sin duplicados en ${(ms / 1000).toFixed(1)} s`);
 
   console.log(`\n${pasadas} PRUEBAS SUPERADAS`);
   process.exit(0);
