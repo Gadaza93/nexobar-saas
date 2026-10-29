@@ -2352,7 +2352,8 @@ function subscriptionInfo(sub, now = Date.now()) {
     const when = daysLeft < 0 ? 'Tu suscripción está vencida' : daysLeft === 0 ? 'Tu suscripción vence hoy' : `Tu suscripción vence en ${daysLeft} ${daysLeft === 1 ? 'día' : 'días'}`;
     banner = { text: `${when}. Comunícate con soporte para renovar tu servicio.`, urgent: daysLeft <= 1 };
   }
-  const plan = sub?.plan ? `Plan ${sub.plan.charAt(0).toUpperCase()}${sub.plan.slice(1)}` : '—';
+  const planDef = typeof normalizePlanId === 'function' && globalThis.PLANS?.[normalizePlanId(sub?.plan)];
+  const plan = planDef ? `Plan ${planDef.label}` : sub?.plan ? `Plan ${sub.plan.charAt(0).toUpperCase()}${sub.plan.slice(1)}` : '—';
   return { known, active, plan, expiryLabel: validDate ? subscriptionDateFmt.format(expires) : '—', daysLeft, banner };
 }
 function renderSubscription() {
@@ -2364,6 +2365,7 @@ function renderSubscription() {
     badge.className = `subscription-badge${info.known ? (info.active ? ' is-active' : ' is-suspended') : ''}`;
   }
   const plan = document.querySelector('#subscriptionPlan'); if (plan) plan.textContent = info.plan;
+  if (typeof applyPlanGates === 'function') applyPlanGates(); // botón «Mejorar a Plan Pro» y candados
   const expiry = document.querySelector('#subscriptionExpiry'); if (expiry) expiry.textContent = info.expiryLabel;
   const note = document.querySelector('#subscriptionNote');
   if (note) note.textContent = isDemoMode() ? 'El Modo Demo no tiene licencia asociada.' : !info.known ? 'Los datos de la licencia se actualizan al sincronizar con la nube.' : state.subscription?.checkedAt ? `Verificado el ${fmtDateTime(state.subscription.checkedAt)}` : '';

@@ -67,7 +67,7 @@
 
           <div class="section-heading">
             <div><h2>Mesas y zonas</h2><p>Selecciona una mesa para tomar o continuar un pedido.</p></div>
-            <div class="section-actions"><div class="segmented table-view-toggle" role="group" aria-label="Vista de mesas"><button type="button" data-table-view="plano">Plano del local</button><button type="button" data-table-view="grid">Cuadrícula compacta</button></div><button type="button" id="editFloorButton" class="outline-button floor-edit-link" data-perm="tables" title="Diseñar el plano en Mi negocio">⚙️ Editar plano</button><button id="newCustomOrderButton" class="outline-button">+ Cuenta personalizada</button><div class="segmented" id="zoneFilter"></div></div>
+            <div class="section-actions"><div class="segmented table-view-toggle" role="group" aria-label="Vista de mesas"><button type="button" data-table-view="plano" data-plan-feature="floorMap">Plano del local</button><button type="button" data-table-view="grid">Cuadrícula compacta</button></div><button type="button" id="editFloorButton" class="outline-button floor-edit-link" data-perm="tables" title="Diseñar el plano en Mi negocio">⚙️ Editar plano</button><button id="newCustomOrderButton" class="outline-button">+ Cuenta personalizada</button><div class="segmented" id="zoneFilter"></div></div>
           </div>
           <div class="table-grid" id="tableGrid"></div>
           <div id="tableFloorWrap" class="floorplan-wrap" hidden><div id="tableFloor" class="floorplan floorplan-live" aria-label="Plano del local"></div></div>
@@ -103,7 +103,7 @@
         </section>
 
         <section id="purchases" class="view">
-          <div class="section-heading"><div><h2>Compras y gastos</h2><p>Registra facturas de mercancía, servicios y otros gastos de la operación.</p></div><div class="inline-actions"><button id="newSupplierButton" class="outline-button">+ Proveedor</button><button id="newExpenseButton" class="outline-button">+ Registrar gasto</button><button id="newPurchaseButton" class="primary-button">+ Factura de compra</button></div></div>
+          <div class="section-heading"><div><h2>Compras y gastos</h2><p>Registra facturas de mercancía, servicios y otros gastos de la operación.</p></div><div class="inline-actions"><button id="newSupplierButton" class="outline-button">+ Proveedor</button><button id="newExpenseButton" class="outline-button" data-plan-feature="expenses">+ Registrar gasto</button><button id="newPurchaseButton" class="primary-button">+ Factura de compra</button></div></div>
           <div class="inventory-summary">
             <div class="summary-item"><span>Compras de hoy</span><strong id="purchasesTotal">$0</strong></div>
             <div class="summary-item"><span>Facturas ingresadas</span><strong id="purchaseInvoiceCount">0</strong></div>
@@ -117,7 +117,7 @@
         </section>
 
         <section id="team" class="view">
-          <div class="section-heading"><div><h2>Equipo</h2><p>Usuarios con PIN y roles. Mesero: toma pedidos · Cajero: cobra, abre y cierra caja · Administrador: todo.</p></div><button id="newUserButton" class="primary-button">+ Nuevo usuario</button></div>
+          <div class="section-heading"><div><h2>Equipo</h2><p>Usuarios con PIN y roles. Mesero: toma pedidos · Cajero: cobra, abre y cierra caja · Administrador: todo.</p></div><button id="newUserButton" class="primary-button" data-plan-feature="multiRole">+ Nuevo usuario</button></div>
           <div class="data-card"><table><thead><tr><th>Nombre</th><th>Rol</th><th>Estado</th><th>Último ingreso</th><th></th></tr></thead><tbody id="teamTable"></tbody></table></div>
           <div class="section-heading history-heading"><div><h2>Bitácora de auditoría</h2><p>Facturas editadas o eliminadas, pedidos eliminados, mermas, conteos y cambios de usuarios (últimos 40).</p></div></div>
           <div class="data-card"><table><thead><tr><th>Fecha</th><th>Usuario</th><th>Acción</th><th>Detalle</th><th>Motivo</th></tr></thead><tbody id="auditTable"></tbody></table></div>
@@ -140,6 +140,7 @@
               <div><span class="field-label">Fecha de vencimiento</span><strong id="subscriptionExpiry">—</strong></div>
             </div>
             <p id="subscriptionNote" class="muted subscription-note"></p>
+            <button type="button" class="primary-button plan-upgrade-button" data-plan-upgrade hidden>Mejorar a Plan Pro</button>
           </article>
           </div>
           <div class="profile-col">
@@ -189,7 +190,7 @@
           </div>
           <article class="data-card floor-designer-card" id="floorDesignerCard" data-perm="tables">
             <div class="floor-designer-head">
-              <div><h3>Mesas y distribución</h3><p class="muted">Arrastra las mesas para ubicarlas como en tu local (mouse o dedo). Toca una para renombrarla, cambiar su tipo o zona. Los cambios se aplican al pulsar «Guardar distribución».</p></div>
+              <div><h3>Mesas y distribución</h3><p class="muted">Arrastra las mesas para ubicarlas como en tu local (mouse o dedo). Toca una para renombrarla, cambiar su tipo o zona. Los cambios se aplican al pulsar «Guardar distribución».</p><p class="plan-table-count" data-plan-table-count hidden></p></div>
               <div class="inline-actions"><button type="button" id="floorAddTable" class="outline-button">+ Mesa</button><button type="button" id="floorAddCounter" class="outline-button">+ Mostrador/Barra</button><button type="button" id="floorDiscardButton" class="outline-button" disabled>Descartar</button><button type="button" id="floorSaveButton" class="primary-button" disabled>Guardar distribución</button></div>
             </div>
             <div class="floorplan-wrap"><div id="floorplan-designer" class="floorplan floorplan-designer" aria-label="Diseñador del plano"></div></div>
@@ -201,11 +202,11 @@
         <section id="reports" class="view">
           <p id="printHeader" class="print-header"></p>
           <div id="reportWatermarkTop" class="demo-watermark-bar demo-watermark-top" hidden>DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM</div>
-          <div class="section-heading"><div><h2 id="reportHeading">Resumen de hoy</h2><p id="reportSubheading">Datos generados desde este dispositivo.</p></div><div class="inline-actions report-actions"><button id="exportXlsxButton" class="outline-button">Exportar Excel</button><button id="printReportButton" class="outline-button">Imprimir / PDF</button><button id="closeShiftButton" class="primary-button" data-perm="shift">Cerrar turno</button></div></div>
+          <div class="section-heading"><div><h2 id="reportHeading">Resumen de hoy</h2><p id="reportSubheading">Datos generados desde este dispositivo.</p></div><div class="inline-actions report-actions"><button id="exportXlsxButton" class="outline-button" data-plan-feature="exports">Exportar Excel</button><button id="printReportButton" class="outline-button" data-plan-feature="exports">Imprimir / PDF</button><button id="closeShiftButton" class="primary-button" data-perm="shift">Cerrar turno</button></div></div>
           <div class="report-subtabs" role="tablist" aria-label="Secciones de reportes">
             <button type="button" class="report-subtab active" role="tab" aria-selected="true" data-report-tab="summary">Resumen</button>
-            <button type="button" class="report-subtab" role="tab" aria-selected="false" data-report-tab="net">Utilidad neta</button>
-            <button type="button" class="report-subtab" role="tab" aria-selected="false" data-report-tab="inventory">Valoración de inventario</button>
+            <button type="button" class="report-subtab" role="tab" aria-selected="false" data-report-tab="net" data-plan-feature="netProfit">Utilidad neta</button>
+            <button type="button" class="report-subtab" role="tab" aria-selected="false" data-report-tab="inventory" data-plan-feature="inventoryValue">Valoración de inventario</button>
           </div>
           <div id="netProfitPanel" class="net-profit-panel" hidden>
             <div class="report-filters" id="netFilters">
@@ -230,7 +231,7 @@
             </div>
           </div>
           <div id="inventoryValuePanel" class="inventory-value-panel" hidden>
-            <div class="report-filters"><p class="muted inv-value-note">Existencias actuales del catálogo valorizadas al costo promedio y al precio de venta.</p><button type="button" id="exportInventoryXlsxButton" class="outline-button">Exportar Inventario Valorizado</button></div>
+            <div class="report-filters"><p class="muted inv-value-note">Existencias actuales del catálogo valorizadas al costo promedio y al precio de venta.</p><button type="button" id="exportInventoryXlsxButton" class="outline-button" data-plan-feature="exports">Exportar Inventario Valorizado</button></div>
             <div class="stats-grid inv-value-kpis">
               <article class="stat-card"><span>Capital invertido total</span><strong id="invCapital">$0</strong><small id="invCapitalNote">Stock × costo</small></article>
               <article class="stat-card"><span>Valor comercial total</span><strong id="invCommercial">$0</strong><small>Stock × precio de venta</small></article>
@@ -709,6 +710,35 @@
       </div>
     </dialog>
 
+    <!-- Función del Plan Pro (planes.js → showUpgradeDialog) -->
+    <dialog id="planUpgradeDialog" class="small-dialog obsidian-modal" aria-labelledby="planUpgradeTitle">
+      <div class="obsidian-modal-header">
+        <div>
+          <span class="obsidian-badge">🔒 PLAN PRO</span>
+          <h2 id="planUpgradeTitle" class="obsidian-title">Mejora tu plan a PRO</h2>
+        </div>
+        <button class="icon-button" data-close="planUpgradeDialog" aria-label="Cerrar">×</button>
+      </div>
+      <div class="obsidian-modal-body">
+        <div class="obsidian-icon-glow">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1a5 5 0 0 0-5 5v4H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5zm-3 9V6a3 3 0 0 1 6 0v4H9z"/></svg>
+        </div>
+        <p class="obsidian-message"><strong id="planUpgradeFeature">Función del Plan Pro</strong></p>
+        <p id="planUpgradeMessage" class="obsidian-message"></p>
+        <ul class="plan-upgrade-list">
+          <li>Mesas ilimitadas y mapa interactivo del salón</li>
+          <li>Valoración de inventario y exportación a Excel/PDF</li>
+          <li>Utilidad neta, rentabilidad y control de gastos</li>
+          <li>Varios usuarios con roles y permisos</li>
+          <li>Soporte prioritario por WhatsApp</li>
+        </ul>
+        <div class="obsidian-actions">
+          <a id="planUpgradeWhatsapp" href="https://wa.me/" target="_blank" rel="noopener noreferrer" class="obsidian-wa-btn"><span>📲 Pasar al Plan Pro · $89.990/mes</span></a>
+          <button type="button" class="obsidian-close-btn" data-close="planUpgradeDialog">Ahora no</button>
+        </div>
+      </div>
+    </dialog>
+
     <!-- Suscripción suspendida (negocios.activo = false): bloquea el POS, no se puede cerrar -->
     <dialog id="suspendedDialog" class="small-dialog obsidian-modal suspended-dialog" aria-labelledby="suspendedTitle">
       <div class="obsidian-modal-header">
@@ -761,6 +791,7 @@
       <button id="mobileShiftBtn" class="mobile-shift-bar closed">Caja cerrada</button>
     </aside>
     <script src="./demo-mode.js" defer></script>
+    <script src="./planes.js" defer></script>
     <script src="./storage.js" defer></script>
     <script src="./modules.js" defer></script>
     <script src="./sync.js" defer></script>

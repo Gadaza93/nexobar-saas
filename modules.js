@@ -3,6 +3,9 @@
    mermas y conteo físico, reportes analíticos y exportación a Excel/PDF.
    Se carga ANTES de app.js: aquí solo hay declaraciones; el arranque ocurre en DOMContentLoaded. */
 
+// Funciones por plan (planAllows, requirePlan…) viven en planes.js (cargado antes en index.html); en Node (pruebas) se carga aquí.
+if (typeof module !== 'undefined' && typeof globalThis.planAllows !== 'function') require('./planes.js');
+
 /* ============ Roles, permisos y PIN ============ */
 const ROLE_LABELS = { admin: 'Administrador', cajero: 'Cajero', mesero: 'Mesero' };
 // Edita esta tabla para ajustar lo que puede hacer cada rol. '*' = todo.
@@ -31,6 +34,7 @@ globalThis.can = can;
 globalThis.actor = actor;
 function deny() { showToast('Tu rol no tiene permiso para esta acción.'); }
 function guard(name, perm) { const original = globalThis[name]; if (typeof original !== 'function') return; globalThis[name] = function (...args) { if (!can(perm)) { deny(); return; } return original.apply(this, args); }; }
+function planGuard(name, feature) { const original = globalThis[name]; if (typeof original !== 'function') return; globalThis[name] = function (...args) { if (!requirePlan(feature)) return; return original.apply(this, args); }; }
 function initials(name) { return String(name || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'; }
 function fmtDateTime(ts) { return new Date(ts).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }
 
@@ -112,6 +116,7 @@ function applyPermissions() {
   document.querySelectorAll('[data-perm]').forEach(el => { el.hidden = !can(el.dataset.perm); });
   const active = document.querySelector('.view.active-view'), nav = active && document.querySelector(`.nav-link[data-view="${active.id}"]`);
   if (me() && nav && nav.hidden) showView('pos');
+  if (typeof applyPlanGates === 'function') applyPlanGates(); // etiquetas PRO y candados del plan (planes.js)
 }
 function renderUserChip() { const user = me(), chip = document.querySelector('#userChip'); chip.hidden = !user; chip.textContent = user ? initials(user.name) : '?'; chip.title = user ? `${user.name} · ${ROLE_LABELS[user.role]}` : ''; }
 
@@ -120,7 +125,8 @@ function renderLogin() {
   document.querySelector('#loginTitle').textContent = 'NexoBar';
   const active = state.users.filter(u => u.active !== false), target = state.users.find(u => u.id === loginTarget);
   document.querySelector('#loginUsers').hidden = !!target; document.querySelector('#loginPinBox').hidden = !target;
-  document.querySelector('#loginUsers').innerHTML = active.map(u => `<button class="login-user" data-login-user="${u.id}"><span class="mini-avatar">${escapeHtml(initials(u.name))}</span><strong>${escapeHtml(u.name)}</strong><small>${escapeHtml(ROLE_LABELS[u.role] || u.role)}</small></button>`).join('');
+  const roleOk = u => typeof planAllowsRole !== 'function' || planAllowsRole(u.role);
+  document.querySelector('#loginUsers').innerHTML = active.map(u => `<button class="login-user${roleOk(u) ? '' : ' plan-locked'}" data-login-user="${u.id}"${roleOk(u) ? '' : ' title="Varios usuarios y roles: Plan Pro"'}><span class="mini-avatar">${escapeHtml(initials(u.name))}</span><strong>${escapeHtml(u.name)}</strong><small>${escapeHtml(ROLE_LABELS[u.role] || u.role)}</small>${roleOk(u) ? '' : '<span class="pro-tag">PRO</span>'}</button>`).join('');
   document.querySelector('#loginWho').textContent = target ? target.name : '';
   document.querySelectorAll('#pinDots i').forEach((dot, index) => dot.classList.toggle('filled', index < loginPin.length));
   const firstRun = state.users.find(u => u.mustChangePin && u.role === 'admin');
@@ -141,6 +147,7 @@ function pressPin(key) {
 }
 function attemptLogin() {
   const user = state.users.find(u => u.id === loginTarget);
+  if (user && typeof planAllowsRole === 'function' && !planAllowsRole(user.role)) { loginTarget = null; loginPin = ''; renderLogin(); return requirePlan('multiRole', 'El Plan Básico incluye un solo usuario administrador. Mejora a Pro para que meseros y cajeros entren con su propio PIN.'); }
   if (user && user.active !== false && hashPin(loginPin, user.salt) === user.pinHash) { loginFails = 0; return completeLogin(user); }
   loginFails++; loginPin = '';
   if (loginFails >= 5) { loginLockUntil = Date.now() + 30000; loginFails = 0; setLoginError('Demasiados intentos. Espera 30 segundos.'); } else setLoginError('PIN incorrecto.');
@@ -176,9 +183,12 @@ function renderTeam() {
 }
 function openUserDialog(id = null) {
   if (!can('team')) return deny();
+  if (!id && !planAllows('multiRole') && state.users.some(u => u.active !== false)) return requirePlan('multiRole');
   editingUserId = id; const user = id && state.users.find(u => u.id === id);
   document.querySelector('#userDialogTitle').textContent = user ? 'Editar usuario' : 'Nuevo usuario';
   document.querySelector('#userName').value = user?.name || ''; document.querySelector('#userRole').value = user?.role || 'mesero';
+  document.querySelectorAll('#userRole option').forEach(o => { o.disabled = !planAllowsRole(o.value) && o.value !== user?.role; }); // Básico: solo administrador
+  if (!user && !planAllowsRole(document.querySelector('#userRole').value)) document.querySelector('#userRole').value = 'admin';
   document.querySelector('#userPin').value = ''; document.querySelector('#userActive').checked = user ? user.active !== false : true;
   document.querySelector('#userPinLabel').textContent = user ? 'Nuevo PIN de 4 dígitos (vacío = no cambiar)' : 'PIN de 4 dígitos';
   document.querySelector('#userDialog').showModal();
@@ -190,6 +200,12 @@ function saveUser() {
   if (!name) return showToast('Escribe el nombre del usuario.');
   if ((!user && !/^\d{4}$/.test(pin)) || (user && pin && !/^\d{4}$/.test(pin))) return showToast('El PIN debe tener exactamente 4 números.');
   if (state.users.some(u => u.id !== editingUserId && u.name.toLowerCase() === name.toLowerCase())) return showToast('Ya existe un usuario con ese nombre.');
+  // Plan Básico: un solo usuario activo y solo administrador. Un negocio que bajó de plan conserva sus usuarios, pero no suma otros ni asigna roles.
+  if (!planAllows('multiRole')) {
+    const activeNow = state.users.filter(u => u.active !== false).length, activeAfter = state.users.filter(u => u.id !== editingUserId && u.active !== false).length + (active ? 1 : 0);
+    if (activeAfter > 1 && activeAfter > activeNow) return requirePlan('multiRole');
+    if (!planAllowsRole(role) && (!user || user.role !== role)) return requirePlan('multiRole');
+  }
   const otherAdmins = state.users.filter(u => u.id !== editingUserId && u.role === 'admin' && u.active !== false).length;
   if (!otherAdmins && !(role === 'admin' && active)) return showToast('Debe existir al menos un administrador activo.');
   if (user) {
@@ -854,8 +870,10 @@ function netProfitDataset(from, to) {
   const net = m.profit - expenses;
   return { from, to, payments, sales: m.total, invoices: m.count, cogs: m.cost, gross: m.profit, grossMargin: m.margin, expenses, expenseCount: count, fromDrawer, groups, net, netMargin: m.total ? net / m.total * 100 : 0 };
 }
+const REPORT_TAB_FEATURE = { net: 'netProfit', inventory: 'inventoryValue' };
 function applyReportTab() {
   if (typeof document === 'undefined') return;
+  if (REPORT_TAB_FEATURE[reportTab] && !planAllows(REPORT_TAB_FEATURE[reportTab])) reportTab = 'summary';
   document.querySelectorAll('[data-report-tab]').forEach(b => { const on = b.dataset.reportTab === reportTab; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)); });
   const panels = { summary: '#reportSummaryPanel', net: '#netProfitPanel', inventory: '#inventoryValuePanel' };
   Object.entries(panels).forEach(([tab, sel]) => { const el = document.querySelector(sel); if (el) el.hidden = reportTab !== tab; });
@@ -977,6 +995,7 @@ function inventoryValueSheets() {
 }
 function exportInventoryXlsx() {
   if (!can('view.reports')) return deny();
+  if (!requirePlan('exports')) return;
   const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
   downloadBlob(buildXlsx(inventoryValueSheets()), `inventario-valorizado-${isDemo ? 'DEMO-NETXPREMIUM-' : ''}${today()}.xlsx`);
   showToast('Inventario valorizado descargado.');
@@ -1066,6 +1085,7 @@ function markDemoSheets(sheets) {
 function downloadBlob(blob, filename) { const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1500); }
 function exportReportXlsx() {
   if (!can('view.reports')) return deny();
+  if (!requirePlan('exports')) return;
   if (reportTab === 'inventory') return exportInventoryXlsx(); // el botón del encabezado exporta la sub-pestaña que se está viendo
   const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
   if (reportTab === 'net') {
@@ -1080,6 +1100,7 @@ function exportReportXlsx() {
 }
 function printReport() {
   if (!can('view.reports')) return deny();
+  if (!requirePlan('exports')) return;
   const isDemo = typeof isDemoMode === 'function' ? isDemoMode() : !!globalThis.isDemoMode?.();
   const watermarkPrefix = isDemo ? 'DOCUMENTO DE DEMOSTRACIÓN — NETXPREMIUM · ' : '';
   const { from, to } = reportBounds();
@@ -1108,7 +1129,7 @@ const FLOOR_SIZE = { mesa: { w: 12, h: 21 }, mostrador: { w: 21, h: 18.5 } };
 const TABLE_VIEW_KEY = 'nexobar-table-view';
 let floorDraft = null, floorDirty = false, floorSelected = null, floorDrag = null;
 let tableView = (() => { try { return localStorage.getItem(TABLE_VIEW_KEY) || 'plano'; } catch { return 'plano'; } })();
-function tableViewMode() { return tableView === 'grid' ? 'grid' : 'plano'; }
+function tableViewMode() { return tableView === 'grid' || !planAllows('floorMap') ? 'grid' : 'plano'; } // el plano del salón es del Plan Pro
 function setTableView(mode) { tableView = mode === 'grid' ? 'grid' : 'plano'; try { localStorage.setItem(TABLE_VIEW_KEY, tableView); } catch { /* preferencia opcional */ } renderTables(); }
 function tableTipo(table) { return table?.tipo === 'mostrador' || (!table?.tipo && table?.type === 'bar') ? 'mostrador' : 'mesa'; }
 function clampFloorPos(tipo, x, y) {
@@ -1187,10 +1208,12 @@ function renderFloorDesigner() {
 function renderFloorStatus() {
   const tables = floorTables(), label = document.querySelector('#floorDirtyLabel');
   ['#floorSaveButton', '#floorDiscardButton'].forEach(id => { const b = document.querySelector(id); if (b) b.disabled = !floorDirty; });
+  if (typeof applyPlanGates === 'function') applyPlanGates(); // contador de mesas del Plan Básico
   if (label) label.textContent = floorDirty ? 'Cambios sin guardar: pulsa «Guardar distribución» para aplicarlos en el salón y en las demás cajas.' : `${tables.length} ${tables.length === 1 ? 'elemento' : 'elementos'} en el plano.`;
 }
 function addFloorItem(tipo) {
   if (typeof isDemoMode === 'function' && isDemoMode()) return showToast('En el modo demo el número de mesas es fijo.');
+  if (!canAddTable(floorTables().length)) return requirePlan('tables', `Tu Plan Básico permite hasta ${planTableLimit()} mesas o barras. Mejora a Pro para tener mesas ilimitadas.`);
   const draft = beginFloorDraft(), base = tipo === 'mostrador' ? 'Barra' : 'Mesa', re = new RegExp(`^${base}\\s+(\\d+)$`, 'i');
   const n = 1 + Math.max(0, ...draft.map(t => Number(String(t.name).trim().match(re)?.[1]) || 0)); // sigue la numeración: Mesa 4 → Mesa 5
   const item = { id: uid('table'), name: `${base} ${n}`, zone: tipo === 'mostrador' ? 'Barra' : 'Salón', tipo, type: tipo === 'mostrador' ? 'bar' : undefined, ...findFreeFloorSpot(draft, tipo) };
@@ -1212,6 +1235,7 @@ function saveFloorLayout() {
   const draft = floorDraft.map(t => ({ ...t, name: String(t.name || '').trim() }));
   if (draft.some(t => !t.name)) return showToast('Todas las mesas necesitan un nombre.');
   const seen = new Set(); for (const t of draft) { const k = t.name.toLowerCase(); if (seen.has(k)) return showToast(`Hay dos mesas llamadas «${t.name}».`); seen.add(k); }
+  if (draft.length > planTableLimit() && draft.length > state.tables.length) return requirePlan('tables', `Tu Plan Básico permite hasta ${planTableLimit()} mesas o barras.`);
   const removed = state.tables.filter(t => !draft.some(d => d.id === t.id));
   const busy = removed.find(t => activeOrderForTable(t.id)); if (busy) return showToast(`${busy.name} tiene un pedido abierto: cóbralo o elimínalo antes de quitarla.`);
   state.tables = draft.map(t => { const tipo = tableTipo(t), out = { ...t, tipo, ...clampFloorPos(tipo, t.posX, t.posY) }; if (tipo === 'mostrador') out.type = 'bar'; else if (out.type === 'bar' || out.type === undefined) delete out.type; return out; });
@@ -1247,6 +1271,7 @@ function handleFloorPointerMove(event) {
   if (!floorDrag || event.pointerId !== floorDrag.pointerId) return;
   const dx = event.clientX - floorDrag.x0, dy = event.clientY - floorDrag.y0;
   if (!floorDrag.moved && Math.hypot(dx, dy) < 4) return; // un toque no mueve la mesa
+  if (!planAllows('floorMap')) { floorDrag.el.classList.remove('dragging'); floorDrag = null; return requirePlan('floorMap', 'Con el Plan Básico las mesas se ubican solas. Mejora a Pro para diseñar tu salón arrastrándolas.'); }
   floorDrag.moved = true;
   const t = floorDraft?.find(x => x.id === floorDrag.id); if (!t) return;
   Object.assign(t, clampFloorPos(tableTipo(t), floorDrag.px + dx / floorDrag.rect.width * 100, floorDrag.py + dy / floorDrag.rect.height * 100));
@@ -1265,6 +1290,7 @@ function handleFloorKeys(event) {
   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); floorSelected = item.dataset.floorItem; return renderFloorDesigner(); }
   if (!mv) return;
   event.preventDefault();
+  if (!planAllows('floorMap')) return requirePlan('floorMap');
   const t = beginFloorDraft().find(x => x.id === item.dataset.floorItem); if (!t) return;
   floorSelected = t.id; Object.assign(t, clampFloorPos(tableTipo(t), t.posX + mv[0], t.posY + mv[1])); floorDirty = true;
   renderFloorDesigner(); document.querySelector(`[data-floor-item="${CSS.escape(t.id)}"]`)?.focus();
@@ -1282,6 +1308,7 @@ globalThis.applyRemoteFloorPlan = applyRemoteFloorPlan;
 /* ============ Eventos y arranque ============ */
 function handleModuleClick(event) {
   const t = event.target.closest('button'); if (!t) return; const d = t.dataset;
+  if (d.loginUser && !planAllowsRole(state.users.find(u => u.id === d.loginUser)?.role)) return requirePlan('multiRole', 'El Plan Básico incluye un solo usuario administrador. Mejora a Pro para que meseros y cajeros entren con su propio PIN.');
   if (d.loginUser) { loginTarget = d.loginUser; loginPin = ''; setLoginError(''); return renderLogin(); }
   if (d.key !== undefined) return pressPin(d.key);
   if (d.editUser) return openUserDialog(d.editUser);
@@ -1349,7 +1376,9 @@ function initModules() {
   ['openCategoriesDialog', 'addCategory', 'saveCategory', 'deleteCategory'].forEach(n => guard(n, 'categories'));
   ['saveProfile'].forEach(n => guard(n, 'profile')); ['exportBackup', 'importBackup'].forEach(n => guard(n, 'backup'));
   ['openPurchaseDialog', 'savePurchase', 'openExpenseDialog', 'saveExpense'].forEach(n => guard(n, 'purchases'));
-  ['openInventoryDialog', 'saveInventory'].forEach(n => guard(n, 'inventory')); guard('deleteCurrentOrder', 'cancelOrder');
+  ['openInventoryDialog', 'saveInventory'].forEach(n => guard(n, 'inventory'));
+  guard('deleteCurrentOrder', 'cancelOrder');
+  ['openExpenseDialog', 'saveExpense'].forEach(n => planGuard(n, 'expenses')); // seguimiento de gastos: Plan Pro
   const closeShift = globalThis.confirmClose; // al cerrar caja se respalda toda la base de datos
   globalThis.confirmClose = function (...args) { const wasOpen = isShiftOpen(), result = closeShift.apply(this, args); if (wasOpen && !isShiftOpen() && backupSettings().onClose) runBackup('Cierre de caja', 'cierre', true); return result; };
   document.addEventListener('pointerdown', handleFloorPointerDown); document.addEventListener('pointermove', handleFloorPointerMove); document.addEventListener('pointerup', handleFloorPointerUp); document.addEventListener('pointercancel', handleFloorPointerUp); document.addEventListener('keydown', handleFloorKeys);

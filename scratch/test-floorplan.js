@@ -35,7 +35,7 @@ const ctx = {
 };
 ctx.globalThis = ctx; ctx.window.document = document;
 vm.createContext(ctx);
-for (const file of ['demo-mode.js', 'storage.js', 'modules.js', 'sync.js', 'print.js', 'app.js']) {
+for (const file of ['demo-mode.js', 'planes.js', 'storage.js', 'modules.js', 'sync.js', 'print.js', 'app.js']) {
   vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), ctx, { filename: file });
 }
 const run = code => vm.runInContext(code, ctx);

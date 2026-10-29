@@ -1587,3 +1587,13 @@ html.is-booting .app-shell, html.is-booting .mobile-drawer, html.is-booting .mob
 html.is-booting body::after { content: ''; position: fixed; top: 50%; left: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border: 3px solid var(--ink-line); border-top-color: var(--accent); border-radius: 50%; opacity: 0; animation: boot-fade .2s ease .35s forwards, boot-spin .8s linear infinite; }
 @keyframes boot-spin { to { transform: rotate(360deg); } }
 @keyframes boot-fade { to { opacity: 1; } }
+
+/* ============ Funciones por plan (planes.js) ============ */
+.pro-tag { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 6px; border-radius: 6px; background: var(--accent-soft); border: 1px solid var(--accent-line); color: var(--accent-ink); font-size: 10px; font-weight: 800; letter-spacing: .06em; line-height: 1.5; vertical-align: middle; }
+.pro-tag::before { content: '🔒'; margin-right: 3px; font-size: 9px; }
+.plan-locked { opacity: .72; cursor: pointer; }
+.plan-locked:hover { opacity: 1; }
+.login-user.plan-locked { filter: grayscale(.6); }
+.plan-table-count { margin-top: 6px; color: var(--accent-ink); font-size: 13px; font-weight: 600; }
+.plan-upgrade-button { margin-top: 12px; }
+.plan-upgrade-list { margin: 4px 0 14px; padding-left: 20px; color: var(--muted); font-size: 14px; line-height: 1.7; text-align: left; }

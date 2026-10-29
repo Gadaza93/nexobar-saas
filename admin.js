@@ -47,8 +47,8 @@ function expiryInfo(fecha, now = Date.now()) {
   return { label, tone: 'ok', note: `${days} días` };
 }
 // Parámetros de admin_update_negocio_status(p_negocio_id, p_activo, p_plan, p_extender_dias)
-function statusPayload(negocio, { activo = negocio.activo !== false, extenderDias = 0 } = {}) {
-  return { p_negocio_id: String(negocio.id), p_activo: Boolean(activo), p_plan: negocio.plan || null, p_extender_dias: Number(extenderDias) || 0 };
+function statusPayload(negocio, { activo = negocio.activo !== false, extenderDias = 0, plan = negocio.plan } = {}) {
+  return { p_negocio_id: String(negocio.id), p_activo: Boolean(activo), p_plan: plan || null, p_extender_dias: Number(extenderDias) || 0 };
 }
 function escapeAdminHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -57,6 +57,7 @@ function escapeAdminHtml(value) {
 /* ---------- Alta de negocio ---------- */
 const PLAN_LABELS = { pro: 'PRO', basico: 'BÁSICO' };
 const planLabel = plan => PLAN_LABELS[String(plan || '').toLowerCase()] || String(plan || '—').toUpperCase();
+const otherPlan = plan => String(plan || '').toLowerCase() === 'basico' ? 'pro' : 'basico'; // botón de cambio de plan de cada fila
 const NEGOCIO_ID_RE = /^[a-z0-9_]{3,40}$/;
 // Palabras genéricas del tipo de local que no aportan al ID: «Gastrobar La Estación» → bar_la_estacion
 const GENERIC_VENUE_WORDS = /^(?:(?:gastro)?bar|restobar|pub|taberna|cantina|discoteca|licorera|estadero)_+/;
@@ -201,6 +202,7 @@ function renderNegocios() {
       <td><span class="admin-badge ${active ? 'is-active' : 'is-suspended'}">${active ? 'Activo' : 'Suspendido'}</span></td>
       <td class="actions"><div class="admin-actions">
         <button type="button" class="admin-switch" role="switch" aria-checked="${active}" data-action="toggle" data-id="${id}" ${busy ? 'disabled' : ''} title="${active ? 'Suspender' : 'Activar'} ${escapeAdminHtml(n.nombre || n.id)}"><span class="admin-switch-track"><span class="admin-switch-thumb"></span></span><span class="admin-switch-label">${active ? 'Activo' : 'Suspendido'}</span></button>
+        <button type="button" class="outline-button admin-small" data-action="plan" data-id="${id}" ${busy ? 'disabled' : ''} title="Cambiar a ${escapeAdminHtml(planLabel(otherPlan(n.plan)))}">→ ${escapeAdminHtml(planLabel(otherPlan(n.plan)))}</button>
         <button type="button" class="outline-button admin-small" data-action="extend" data-id="${id}" ${busy ? 'disabled' : ''}>+${EXTEND_DAYS} días</button>
       </div></td>
     </tr>`;
@@ -225,11 +227,13 @@ async function applyNegocioChange(id, kind) {
   const negocio = negocios.find(n => String(n.id) === id); if (!negocio || busyIds.has(id)) return;
   const active = negocio.activo !== false, name = negocio.nombre || negocio.id;
   if (kind === 'toggle' && active && !confirm(`¿Suspender «${name}»? Su POS quedará bloqueado hasta reactivarlo.`)) return;
-  const options = kind === 'toggle' ? { activo: !active } : { extenderDias: EXTEND_DAYS };
+  const nextPlan = otherPlan(negocio.plan);
+  if (kind === 'plan' && !confirm(`¿Cambiar «${name}» al plan ${planLabel(nextPlan)}?${nextPlan === 'basico' ? ' Quedará con 10 mesas, un solo usuario y sin reportes avanzados.' : ''}`)) return;
+  const options = kind === 'toggle' ? { activo: !active } : kind === 'plan' ? { plan: nextPlan } : { extenderDias: EXTEND_DAYS };
   busyIds.add(id); renderNegocios();
   try {
     await updateNegocio(negocio, options);
-    adminToast(kind === 'extend' ? `Licencia de «${name}» extendida ${EXTEND_DAYS} días.` : `«${name}» ${active ? 'suspendido' : 'activado'}.`);
+    adminToast(kind === 'extend' ? `Licencia de «${name}» extendida ${EXTEND_DAYS} días.` : kind === 'plan' ? `«${name}» ahora tiene el plan ${planLabel(nextPlan)}.` : `«${name}» ${active ? 'suspendido' : 'activado'}.`);
   } catch (err) {
     adminToast(`⚠ No se pudo actualizar «${name}»: ${err.message}`);
   } finally {
@@ -343,5 +347,5 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initAdmin); else initAdmin();
 }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isSuperadmin, computeMetrics, expiryInfo, statusPayload, escapeAdminHtml, adminSignIn, fetchNegocios, updateNegocio, NOT_SUPERADMIN, EXTEND_DAYS, slugifyNegocioId, generatePassword, buildCreatePayload, describeCreateError, credentialsText, createNegocio, planLabel };
+  module.exports = { isSuperadmin, computeMetrics, expiryInfo, statusPayload, escapeAdminHtml, adminSignIn, fetchNegocios, updateNegocio, NOT_SUPERADMIN, EXTEND_DAYS, slugifyNegocioId, generatePassword, buildCreatePayload, describeCreateError, credentialsText, createNegocio, planLabel, otherPlan };
 }

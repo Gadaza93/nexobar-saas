@@ -20,6 +20,11 @@ POS para bares (antes "Brasa POS"), en español de Colombia (`es-CO`, pesos sin 
 - **Pedidos abiertos: `pedidos_activos`, no `negocios`.** Si la tabla tiene la columna `meta` (migración de Supabase: `alter table pedidos_activos add column meta jsonb` + la tabla en la publicación `supabase_realtime`), `usaTablaPedidos` activa el modo tabla: cada pedido viaja como su fila (el pedido completo en `meta`), solo suben los que tienen cambios y `negocios.configuracion` deja de llevar `orders`. Sin la columna se mantiene el modo anterior (`configuracion.orders`). Toda escritura de `negocios.configuracion` pasa por `configuracionNegocio()`. El tiempo real de `pedidos_activos` trae un pedido por evento: se aplica con `mergeRemoteOrders([...], { completa: false })`, nunca como lista completa. Prueba: `scratch/test-pedidos-tabla.js`.
 - **Fila `negocios`: solo `actualizarNegocio()`.** En Supabase las cajas solo pueden actualizar `nombre` y `configuracion` (permisos por columna) y no crean filas (las crea `admin_create_negocio`); así un bar no puede tocar `activo`, `plan` ni `fecha_vencimiento`. Nunca `upsert` ni otras columnas: Supabase lo rechaza con 403. `scratch/mock-supabase.js` replica estos permisos.
 - **PIN de administrador sin texto plano.** En la nube solo `admin_salt`, `admin_hash` y `admin_pin_at`; `setUserPin` estampa `pinAt` y al descargar gana el PIN más reciente (`applyAdminPinLocally`). Un PIN de 4 dígitos con su sal se puede probar por fuerza bruta: no es un secreto frente a quien ya tiene acceso técnico a una caja. Prueba: `scratch/test-negocios-permisos.js`.
+- **Funciones por plan (`planes.js`).** El plan es `negocios.plan` (`basico` | `pro`), que solo cambia el superadmin (panel → botón de plan, `admin_update_negocio_status`); llega a `state.subscription.plan` al descargar y en tiempo real (`applySubscriptionStatus` → `enforcePlanSession`). Sin plan conocido, con un valor desconocido o en demo rige el Pro. La tabla `compras` (pagos de la landing) no se lee desde la app: al entregar una compra, el superadmin asigna el plan al negocio.
+  - Básico: hasta `PLAN_MAX_MESAS` (10) mesas **o barras** en total; salón solo en cuadrícula y diseñador sin arrastre; sin utilidad neta, valoración de inventario, exportaciones (Excel/impresión) ni registro de gastos; un solo usuario y solo rol administrador (los demás no inician sesión). Pro: todo.
+  - Para bloquear algo nuevo: agrega la función a `PLAN_FEATURES`, marca el botón con `data-plan-feature="…"` (etiqueta PRO y modal en lugar del clic) **y** valida dentro de la función con `requirePlan(…)` o `planGuard(nombre, función)` en `initModules`: ocultar el botón no basta.
+  - Bajar de plan nunca borra datos: se conservan mesas y usuarios de más, pero no se agregan otros.
+  - En la nube, el trigger `negocios_limite_mesas` (ver Operación de Supabase) impide que el plano de un negocio Básico crezca por encima de 10; los reportes se calculan en el equipo con datos del propio bar, así que su bloqueo es de la app. Prueba: `scratch/test-planes.js`.
 - **Nunca bloquear la venta por la red.** Toda operación se completa en local primero; los fallos de Supabase solo cambian el indicador de sincronización.
 - Si `supabase.min.js` no cargó, `getClient()` devuelve `null`, la app trabaja offline y `loadSupabaseLib()` reintenta desde el mismo archivo local.
 
@@ -48,7 +53,25 @@ El esquema no está en el repositorio: estos pasos se aplican a mano en el proye
 4. **Plan Pro** antes del primer cliente de pago (Organization → Billing). El plan gratuito pausa el proyecto tras una semana sin uso, tiene 500 MB de base de datos y no incluye copias de seguridad descargables.
 5. **Copias de seguridad**: Pro hace una copia diaria automática (Database → Backups). Para poder volver a un minuto exacto, activar el complemento Point in Time Recovery (costo aparte).
 6. **Alertas de uso**: Organization → Billing → dejar activado el *spend cap* hasta conocer el consumo real, y revisar Reports → Database (tamaño y conexiones) y Usage (transferencia) cada mes. Los avisos de uso llegan al correo de facturación configurado en Organization → Billing.
-7. **Revisión mensual del tamaño** (SQL Editor):
+7. **Límite de mesas del Plan Básico en la nube** — **pendiente de aplicar** (SQL Editor). Si una caja sube un plano más grande que 10 y que el que ya había, se conserva el plano anterior y el resto de la configuración se guarda normal (la caja no queda sin sincronizar). El 10 es el mismo `PLAN_MAX_MESAS` de `planes.js`:
+   ```sql
+   create or replace function public.negocios_limite_mesas() returns trigger language plpgsql set search_path = public as $$
+   declare v_max constant int := 10; v_nuevo int; v_anterior int;
+   begin
+     if lower(coalesce(new.plan, '')) not in ('basico', 'básico') then return new; end if;
+     v_nuevo := case when jsonb_typeof(new.configuracion -> 'floorPlan' -> 'tables') = 'array' then jsonb_array_length(new.configuracion -> 'floorPlan' -> 'tables') else 0 end;
+     v_anterior := case when jsonb_typeof(old.configuracion -> 'floorPlan' -> 'tables') = 'array' then jsonb_array_length(old.configuracion -> 'floorPlan' -> 'tables') else 0 end;
+     if v_nuevo > v_max and v_nuevo > v_anterior then
+       if old.configuracion ? 'floorPlan' then new.configuracion := jsonb_set(new.configuracion, '{floorPlan}', old.configuracion -> 'floorPlan');
+       else new.configuracion := new.configuracion - 'floorPlan'; end if;
+     end if;
+     return new;
+   end; $$;
+   revoke all on function public.negocios_limite_mesas() from public, anon, authenticated;
+   drop trigger if exists negocios_limite_mesas on public.negocios;
+   create trigger negocios_limite_mesas before update of configuracion on public.negocios for each row execute function public.negocios_limite_mesas();
+   ```
+8. **Revisión mensual del tamaño** (SQL Editor):
    ```sql
    select relname as tabla, pg_size_pretty(pg_total_relation_size(relid)) as tamano, n_live_tup as filas
    from pg_stat_user_tables order by pg_total_relation_size(relid) desc;
@@ -80,12 +103,13 @@ En `<head>`:
 
 Al final de `<body>`, todos con `defer` (se ejecutan en este orden al terminar de leer el HTML; solo `app.js` ejecuta el arranque). Un `init` automático debe esperar a `DOMContentLoaded` mientras `readyState !== "complete"`, no solo en `"loading"`:
 1. `demo-mode.js` — debe ir antes que todo lo que llame a `isDemoMode()`.
-2. `storage.js` — solo declaraciones de persistencia.
-3. `modules.js` — vistas/render (facturas, reportes, etc.).
-4. `sync.js` — `NexoSync`.
-5. `import-products.js` — importación de productos desde Excel. Carga `xlsx.full.min.js` bajo demanda (`loadXlsxLib()`) al abrir el importador o descargar la plantilla; no lo vuelvas a poner en `index.html`.
-6. `print.js` — plantillas de tickets térmicos (58/80 mm) y `printReceipt()`: en escritorio vía `desktop.printReceipt` (ventana oculta en `main.js`), en web con un `<iframe>` invisible. No usar `window.open` para imprimir: en Electron está bloqueado.
-7. `app.js` — estado, lógica de negocio y `bootstrap()`.
+2. `planes.js` — plan del negocio y funciones por plan (`planAllows`, `requirePlan`, `applyPlanGates`); `modules.js` lo carga con `require` en Node.
+3. `storage.js` — solo declaraciones de persistencia.
+4. `modules.js` — vistas/render (facturas, reportes, etc.).
+5. `sync.js` — `NexoSync`.
+6. `import-products.js` — importación de productos desde Excel. Carga `xlsx.full.min.js` bajo demanda (`loadXlsxLib()`) al abrir el importador o descargar la plantilla; no lo vuelvas a poner en `index.html`.
+7. `print.js` — plantillas de tickets térmicos (58/80 mm) y `printReceipt()`: en escritorio vía `desktop.printReceipt` (ventana oculta en `main.js`), en web con un `<iframe>` invisible. No usar `window.open` para imprimir: en Electron está bloqueado.
+8. `app.js` — estado, lógica de negocio y `bootstrap()`.
 
 ## Estilos: paleta Obsidian
 

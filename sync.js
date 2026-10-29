@@ -248,6 +248,10 @@ function applySubscriptionStatus(negocio) {
   if (typeof renderSubscription === "function") {
     try { renderSubscription(); } catch (e) { /* ignore */ }
   }
+  // Cambio de plan (Básico / Pro): candados, vista de mesas y usuario en sesión (planes.js)
+  if (next.plan !== prev.plan && typeof enforcePlanSession === "function") {
+    try { enforcePlanSession(); } catch (e) { /* ignore */ }
+  }
 }
 
 // 2. Sanitizadores previos antes de cada upsert
@@ -2087,6 +2091,8 @@ function setupRealtime() {
           if (typeof state !== "undefined" && state) {
             if (row.nombre && state.profile) state.profile.name = row.nombre;
             if (row.telefono && state.profile) state.profile.phone = row.telefono;
+            // Licencia en vivo: el superadmin suspendió, renovó o cambió el plan
+            applySubscriptionStatus(row);
 
             // Sincronización en vivo del PIN de administración
             const cfgPin = row.configuracion || {};

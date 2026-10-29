@@ -1,4 +1,4 @@
-const CACHE = 'nexobar-pos-v35';
+const CACHE = 'nexobar-pos-v36';
 const ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const ASSETS = [
   './xlsx.full.min.js',
   './supabase.min.js',
   './demo-mode.js',
+  './planes.js',
   './storage.js',
   './modules.js',
   './sync.js',
