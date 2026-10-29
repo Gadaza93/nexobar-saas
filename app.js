@@ -2281,6 +2281,14 @@ function setupActivation() {
       await NexoSync.signOutTerminal(); setBusy(false);
       return setMessage(`Estas credenciales son de otro negocio. Esta caja está vinculada a «${state.terminal?.businessId}».`);
     }
+    // Contraseña temporal (cuenta nueva): primero la definitiva. Mientras tanto la nube no le da datos del negocio
+    if (result.mustChangePassword) {
+      setMessage('');
+      if (!(await askNewPassword(password))) {
+        await NexoSync.signOutTerminal(); setBusy(false); passwordInput.value = '';
+        return setMessage('Para vincular esta caja debes crear tu contraseña definitiva.');
+      }
+    }
 
     linkTerminal(result.businessId, { email: result.email });
     setMessage('Descargando catálogo del negocio…', true);
@@ -2360,6 +2368,48 @@ function setupRecovery() {
   });
 }
 globalThis.openRecovery = openRecovery;
+
+/* ---------- Contraseña temporal → definitiva ----------
+   Al vincular con la contraseña que llegó por correo (cuenta nueva), se pide la definitiva antes de seguir.
+   Devuelve true cuando quedó cambiada; false si el usuario cierra el diálogo. */
+let passwordChangeResolve = null, passwordChangeTemp = '';
+function askNewPassword(tempPassword) {
+  setupPasswordChange();
+  const $ = s => document.querySelector(s), dialog = $('#passwordChangeDialog');
+  passwordChangeTemp = tempPassword || '';
+  ['#newPassword', '#newPassword2'].forEach(s => { $(s).value = ''; });
+  setPasswordChangeMessage('');
+  if (!dialog.open) dialog.showModal();
+  $('#newPassword').focus();
+  return new Promise(resolve => { passwordChangeResolve = resolve; });
+}
+function setPasswordChangeMessage(text, info = false) { const el = document.querySelector('#passwordChangeMessage'); el.textContent = text || ''; el.classList.toggle('is-info', info); }
+function finishPasswordChange(changed) {
+  const dialog = document.querySelector('#passwordChangeDialog'), resolve = passwordChangeResolve;
+  passwordChangeResolve = null; passwordChangeTemp = '';
+  if (dialog.open) dialog.close();
+  if (resolve) resolve(changed);
+}
+function setupPasswordChange() {
+  const dialog = document.querySelector('#passwordChangeDialog'); if (dialog.dataset.ready) return; dialog.dataset.ready = '1';
+  const $ = s => document.querySelector(s);
+  dialog.addEventListener('cancel', event => { event.preventDefault(); finishPasswordChange(false); });
+  $('#passwordChangeCancel').addEventListener('click', () => finishPasswordChange(false));
+  $('#passwordChangeForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const password = $('#newPassword').value, confirm = $('#newPassword2').value;
+    if (password.length < 8) { setPasswordChangeMessage('La contraseña debe tener al menos 8 caracteres.'); return $('#newPassword').focus(); }
+    if (password === passwordChangeTemp) { setPasswordChangeMessage('Debe ser distinta de la contraseña temporal del correo.'); return $('#newPassword').focus(); }
+    if (password !== confirm) { setPasswordChangeMessage('Las dos contraseñas no coinciden.'); return $('#newPassword2').focus(); }
+    const button = $('#passwordChangeSubmit'); button.disabled = true; setPasswordChangeMessage('Guardando contraseña…', true);
+    const result = await NexoSync.changeTemporaryPassword(password);
+    button.disabled = false;
+    if (!result.ok) return setPasswordChangeMessage(result.error);
+    showToast('Contraseña creada. Úsala de ahora en adelante para vincular tus cajas.');
+    finishPasswordChange(true);
+  });
+}
+globalThis.askNewPassword = askNewPassword;
 function relinkTerminal() {
   if (isDemoMode() || !state.terminal?.businessId || isSubscriptionSuspended()) return Promise.resolve(false);
   if (document.querySelector('#activationDialog')?.open) return Promise.resolve(false);

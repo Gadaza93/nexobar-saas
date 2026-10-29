@@ -141,7 +141,8 @@ async function confirmar(email: string, codigo: string, password: string): Promi
   const cuenta = await buscarCuenta(email); // el negocio pudo suspenderse o la cuenta cambiar mientras tanto
   if (!cuenta || !cuenta.activo || cuenta.user_id !== fila.user_id) return fallo('Esta cuenta no está activa. Comunícate con soporte.');
 
-  const { error: authError } = await supabase.auth.admin.updateUserById(fila.user_id, { password });
+  // Elegir contraseña con el código del correo también cuenta como cambiar la temporal (cambio obligatorio)
+  const { error: authError } = await supabase.auth.admin.updateUserById(fila.user_id, { password, app_metadata: { must_change_password: false } });
   if (authError) {
     console.error('updateUserById', authError);
     return fallo(/weak|short|password/i.test(authError.message) ? 'Elige una contraseña más segura (letras y números, al menos 8 caracteres).' : 'No se pudo cambiar la contraseña. Intenta de nuevo.');

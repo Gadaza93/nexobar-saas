@@ -2,6 +2,7 @@
 // Prueba del flujo de activación de terminal (SaaS multinegocio):
 // 1. NexoSync.activateTerminal: credenciales, business_id desde app_metadata, sin red y Modo Demo.
 // 2. ensureTerminalLinked / linkTerminal (app.js): terminal nueva bloqueada, instalaciones antiguas respetadas.
+// 1e. Contraseña temporal: activateTerminal la señala, sin cambiarla no se sincroniza y changeTemporaryPassword la cambia.
 
 const fs = require('fs');
 const path = require('path');
@@ -12,6 +13,7 @@ console.log('=== PRUEBAS: ACTIVACIÓN DE TERMINAL ===\n');
 
 globalThis.__FORCE_DEMO_MODE__ = false;
 let authResponse = null, lastCredentials = null, currentSession = null, clientOptions = null, remoteQueries = 0, signedOut = false;
+let authCalls = [], updateUserError = null, rpcError = null; // cambio de contraseña temporal
 let negociosRow = { id: 'bar_900123', nombre: 'Bar Central', activo: true };
 // Cadena mínima tipo PostgREST: toda consulta resuelve a lista vacía salvo negocios.maybeSingle()
 function queryChain(table) {
@@ -30,8 +32,18 @@ globalThis.supabase = {
       auth: {
         signInWithPassword: async creds => { lastCredentials = creds; return authResponse; },
         getSession: async () => ({ data: { session: currentSession }, error: null }),
-        signOut: async () => { signedOut = true; currentSession = null; return { error: null }; }
+        signOut: async () => { signedOut = true; currentSession = null; return { error: null }; },
+        updateUser: async attrs => { authCalls.push(['updateUser', attrs]); return { data: {}, error: updateUserError }; },
+        // El servidor ya quitó la marca: la sesión renovada trae app_metadata sin must_change_password
+        refreshSession: async () => {
+          authCalls.push(['refreshSession']);
+          if (rpcError) return { data: { session: currentSession }, error: null };
+          const { must_change_password: _m, ...meta } = currentSession.user.app_metadata;
+          currentSession = { ...currentSession, user: { ...currentSession.user, app_metadata: meta } };
+          return { data: { session: currentSession }, error: null };
+        }
       },
+      rpc: async name => { authCalls.push(['rpc', name]); return { data: !rpcError, error: rpcError }; },
       from: queryChain
     };
   }
@@ -44,7 +56,7 @@ const NexoSync = require('../sync.js');
   // --- 1. activateTerminal ---
   authResponse = { data: { user: { email: 'caja@bar.com', app_metadata: { business_id: 'bar_900123' }, user_metadata: {} } }, error: null };
   let res = await NexoSync.activateTerminal('caja@bar.com', 'secreta');
-  assert.deepStrictEqual(res, { ok: true, businessId: 'bar_900123', email: 'caja@bar.com' });
+  assert.deepStrictEqual(res, { ok: true, businessId: 'bar_900123', email: 'caja@bar.com', mustChangePassword: false });
   assert.deepStrictEqual(lastCredentials, { email: 'caja@bar.com', password: 'secreta' });
   console.log('   ✅ Credenciales válidas devuelven el business_id de app_metadata.');
 
@@ -94,6 +106,27 @@ const NexoSync = require('../sync.js');
   assert.strictEqual(await NexoSync.hasAuthSession(), true);
   assert.strictEqual(await NexoSync.checkInitialConnection(), true);
   console.log('   ✅ Sin sesión no hay consultas como anon; con sesión la conexión se verifica.');
+
+  // --- 1e. Contraseña temporal ---
+  authResponse = { data: { user: { email: 'nuevo@bar.com', app_metadata: { business_id: 'bar_900123', must_change_password: true }, user_metadata: {} } }, error: null };
+  res = await NexoSync.activateTerminal('nuevo@bar.com', 'Temporal123');
+  assert.strictEqual(res.ok, true); assert.strictEqual(res.mustChangePassword, true);
+  currentSession = { access_token: 'jwt', user: { app_metadata: { business_id: 'bar_900123', must_change_password: true } } };
+  assert.strictEqual(await NexoSync.hasAuthSession(), false, 'con la marca no se sincroniza (el RLS daría listas vacías)');
+  rpcError = { message: 'network' };
+  res = await NexoSync.changeTemporaryPassword('MiClaveNueva1');
+  assert.strictEqual(res.ok, false);
+  assert.match(res.error, /no se pudo confirmar/);
+  rpcError = null; updateUserError = { message: 'New password should be different from the old password.' }; authCalls = [];
+  res = await NexoSync.changeTemporaryPassword('MiClaveNueva1'); // reintento: la contraseña ya había cambiado
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(authCalls.map(c => c[0] === 'rpc' ? c[1] : c[0]), ['updateUser', 'marcar_contrasena_cambiada', 'refreshSession']);
+  assert.strictEqual(await NexoSync.hasAuthSession(), true, 'con la sesión renovada ya sincroniza');
+  updateUserError = { message: 'Password should be at least 6 characters. Password is known to be weak' };
+  res = await NexoSync.changeTemporaryPassword('123');
+  assert.strictEqual(res.ok, false); assert.match(res.error, /más segura/);
+  updateUserError = null;
+  console.log('   ✅ Contraseña temporal: se señala al vincular, bloquea la sincronización y se cambia (con reintento seguro).');
 
   await NexoSync.signOutTerminal();
   assert.strictEqual(signedOut, true);

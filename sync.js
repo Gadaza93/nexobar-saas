@@ -204,7 +204,8 @@ async function activateTerminal(email, password) {
     const user = data?.user;
     const bId = String(user?.app_metadata?.business_id || "").trim();
     if (!bId) return { ok: false, error: "Esta cuenta no tiene un negocio asignado. Contacta a soporte NexoBar." };
-    return { ok: true, businessId: bId, email: user.email || email };
+    // Cuenta nueva con contraseña temporal: la app pide la definitiva antes de vincular (el RLS no le da datos mientras tanto)
+    return { ok: true, businessId: bId, email: user.email || email, mustChangePassword: user.app_metadata?.must_change_password === true };
   } catch (err) {
     console.warn("[NexoSync] Error al activar terminal:", err);
     return { ok: false, error: "No se pudo conectar con el servidor de NexoBar. Intenta de nuevo." };
@@ -232,6 +233,32 @@ async function recuperarAcceso(body) {
     return { ok: false, error: RECUPERACION_SIN_CONEXION };
   }
 }
+// Contraseña temporal → definitiva: la cambia el propio usuario y marcar_contrasena_cambiada quita la marca. Luego se
+// renueva la sesión, porque el token anterior todavía trae la marca y con ella get_business_id() no da ningún negocio.
+async function changeTemporaryPassword(password) {
+  if (isDemoMode()) return { ok: false, error: "El Modo Demo no tiene cuenta." };
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return { ok: false, error: "Necesitas conexión a internet para crear tu contraseña." };
+  const sb = getClient();
+  if (!sb || !sb.auth) return { ok: false, error: RECUPERACION_SIN_CONEXION };
+  try {
+    const { error } = await sb.auth.updateUser({ password });
+    // «debe ser distinta»: la app ya verificó que no es la temporal, así que es un reintento con la contraseña ya cambiada
+    if (error && !/different|same/i.test(error.message || "")) {
+      return { ok: false, error: /weak|short|characters|password/i.test(error.message || "") ? "Elige una contraseña más segura (letras y números, al menos 8 caracteres)." : `No se pudo cambiar la contraseña: ${error.message}` };
+    }
+    const { error: rpcError } = await sb.rpc("marcar_contrasena_cambiada");
+    if (rpcError) return { ok: false, error: "La contraseña cambió, pero no se pudo confirmar en el servidor. Toca de nuevo «Guardar contraseña»." };
+    const { data, error: refreshError } = await sb.auth.refreshSession();
+    if (refreshError || !data?.session || data.session.user?.app_metadata?.must_change_password === true) {
+      return { ok: false, error: "No se pudo renovar la sesión. Toca de nuevo «Guardar contraseña»." };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.warn("[NexoSync] Error al cambiar la contraseña temporal:", err);
+    return { ok: false, error: RECUPERACION_SIN_CONEXION };
+  }
+}
+
 const requestRecoveryCode = email => recuperarAcceso({ accion: "solicitar", email });
 const confirmRecoveryCode = (email, codigo, password) => recuperarAcceso({ accion: "confirmar", email, codigo, password });
 
@@ -241,7 +268,8 @@ async function hasAuthSession(sb = getClient()) {
   if (!sb || !sb.auth || typeof sb.auth.getSession !== "function") return false;
   try {
     const { data } = await sb.auth.getSession();
-    return Boolean(data?.session);
+    // Con la contraseña temporal sin cambiar, el RLS devolvería listas vacías: como sin sesión, no se sincroniza
+    return Boolean(data?.session) && data.session.user?.app_metadata?.must_change_password !== true;
   } catch (err) {
     return false;
   }
@@ -2589,6 +2617,7 @@ rootScope.NexoSync = {
   getClient,
   activateTerminal,
   requestRecoveryCode,
+  changeTemporaryPassword,
   confirmRecoveryCode,
   isTerminalLinked,
   hasAuthSession,

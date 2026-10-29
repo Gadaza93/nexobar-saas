@@ -543,6 +543,28 @@
       <button type="button" class="outline-button activation-secondary" data-close="recoveryDialog">Volver</button>
     </dialog>
 
+    <!-- Cuenta nueva: la contraseña temporal del correo se cambia por la definitiva antes de vincular -->
+    <dialog id="passwordChangeDialog" class="small-dialog login-dialog activation-dialog" aria-labelledby="passwordChangeTitle">
+      <div class="login-brand activation-brand">
+        <p class="eyebrow">NexoBar POS</p>
+        <h2 id="passwordChangeTitle">Crea tu contraseña</h2>
+        <p class="muted">Entraste con la contraseña temporal del correo. Por seguridad, crea ahora tu contraseña definitiva.</p>
+      </div>
+      <form id="passwordChangeForm" class="activation-form" novalidate>
+        <label class="activation-field">
+          <span>Nueva contraseña maestra</span>
+          <input id="newPassword" type="password" autocomplete="new-password" placeholder="Mínimo 8 caracteres" required />
+        </label>
+        <label class="activation-field">
+          <span>Confirmar contraseña</span>
+          <input id="newPassword2" type="password" autocomplete="new-password" placeholder="Repite la contraseña" required />
+        </label>
+        <button id="passwordChangeSubmit" type="submit" class="primary-button activation-primary">Guardar contraseña</button>
+      </form>
+      <p id="passwordChangeMessage" class="login-error activation-message" role="alert"></p>
+      <button id="passwordChangeCancel" type="button" class="outline-button activation-secondary">Cancelar</button>
+    </dialog>
+
     <!-- Restablecer el PIN de administrador con la contraseña maestra (necesita internet) -->
     <dialog id="pinRecoveryDialog" class="small-dialog login-dialog activation-dialog" aria-labelledby="pinRecoveryTitle">
       <div class="login-brand activation-brand">
