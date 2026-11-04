@@ -9,6 +9,7 @@ POS para bares (antes "Brasa POS"), en español de Colombia (`es-CO`, pesos sin 
 - **CSP** (meta en `index.html` y `admin.html`): `script-src 'self'` + el hash del script del tema. Si cambias ese script en línea, recalcula su hash (`sha256-…` de su contenido exacto) en ambos archivos y en `_headers` (cabeceras de Cloudflare). Nada de `<script>` en línea nuevos, atributos `on*=` ni `eval`.
 - Los scripts también se cargan en Node para las pruebas de `scratch/`: protege el acceso a `window`, `document`, `navigator` y `localStorage` con `typeof … !== 'undefined'` o `try/catch`.
 - Comentarios y textos de interfaz en español.
+- **Campos de dinero con punto de miles.** Todo `<input>` de pesos es `type="text" inputmode="numeric" data-money` (no `type="number"`, que no admite el punto): `modules.js` le pone el punto mientras se escribe («70.000»). Se lee con `moneyInputValue(el.value)` (o `moneyDigits` si hay que distinguir vacío de 0) y se llena con `formatMoneyInput(n)`; nunca `Number(el.value)`, que leería «70.000» como 70. Cantidades y stock siguen siendo `type="number"`. Prueba: `scratch/test-miles-montos.js`.
 
 ## Arquitectura offline-first
 
