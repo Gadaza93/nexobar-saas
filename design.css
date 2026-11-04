@@ -171,6 +171,40 @@ html[data-theme="light"] .login-dialog::backdrop { background: radial-gradient(5
 .ticket-head span::first-letter { text-transform: uppercase; }
 .ticket-items > * { border-bottom: 1px dashed var(--line-strong); }
 .ticket-total { border-top: 1px dashed var(--line-strong); }
+/* Tandas: la nueva (pendiente por guardar) arriba y resaltada; las rondas guardadas debajo, plegables, con su hora */
+.ticket-round { padding: 4px 0 6px; }
+.ticket-round .ticket-item:last-child { border-bottom: 0; }
+.ticket-round-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 8px 0 4px; font-size: 12px; cursor: default; list-style: none; }
+.ticket-round-head::-webkit-details-marker { display: none; }
+.ticket-round-head strong { color: var(--text-2); font-weight: 700; }
+.ticket-round-head span { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+details.ticket-round > .ticket-round-head { cursor: pointer; }
+details.ticket-round > .ticket-round-head strong::before { content: '▸'; display: inline-block; width: 14px; color: var(--muted); transition: transform .15s; }
+details.ticket-round[open] > .ticket-round-head strong::before { transform: rotate(90deg); }
+.ticket-round-draft { margin: 0 0 6px; padding: 2px 8px 6px; border: 1px solid var(--accent-line); border-radius: var(--r-sm); background: var(--accent-soft); }
+.ticket-round-draft .ticket-round-head strong { color: var(--accent-ink); }
+.ticket-item-cat { display: block; font-size: 11px; }
+.ticket-item-saved { grid-template-columns: 1fr auto auto; align-items: center; padding: 7px 0; }
+.ticket-item-saved strong { font-weight: 600; }
+.ticket-remove-saved { width: 23px; height: 23px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--muted); font-weight: 800; line-height: 1; }
+.ticket-remove-saved:hover { color: var(--danger); border-color: var(--danger); }
+.draft-note { margin: 8px 0 0; padding: 7px 10px; border-radius: 7px; background: var(--warn-soft); color: var(--warn-ink); font-size: 12px; font-weight: 700; }
+/* Clics seguidos en la grilla: sin anclaje de scroll ni recálculos que lleguen desde la cuenta */
+#orderDialog .product-grid { overflow-anchor: none; contain: content; }
+#orderDialog .ticket-panel { contain: layout; }
+#orderDialog .ticket-items { overflow-anchor: none; }
+
+/* Salón: dinero por cobrar en mesas y cuentas abiertas, fijo abajo mientras se recorre la vista */
+.open-money-bar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 14px; margin-top: 24px; padding: 12px 18px; background: var(--ink); color: var(--on-ink); border: 1px solid var(--accent-line); border-radius: var(--r-md); box-shadow: var(--shadow-sm); }
+.open-money-label { font-size: 13px; font-weight: 700; }
+.open-money-bar small { color: var(--on-ink-2); font-size: 12px; margin-left: auto; }
+.open-money-bar strong { font-family: var(--font-display); font-size: 22px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+@media (max-width: 768px) {
+  .open-money-bar { gap: 4px 10px; flex-wrap: wrap; padding: 10px 14px; margin-top: 18px; }
+  .open-money-label { flex-basis: 100%; font-size: 12px; }
+  .open-money-bar small { margin-left: 0; }
+  .open-money-bar strong { margin-left: auto; font-size: 20px; }
+}
 .product-grid { gap: 14px; } /* la tarjeta .product se define en styles.css */
 .category-tabs button { background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2); }
 .category-tabs button.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }

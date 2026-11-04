@@ -10,6 +10,7 @@
 // 7. Producto nuevo con una venta antes de subirlo: stock absoluto una sola vez, sin doble descuento.
 // 8. Vender de más deja stock negativo igual en la caja y en la nube (sin ajustes fantasma).
 // 9. Sin la tabla (SQL sin aplicar): modo anterior, stock absoluto y ningún movimiento.
+// 10. Pedido por tandas: el stock se descuenta al guardar la tanda y no otra vez al cobrar, también entre dos cajas.
 
 const assert = require('assert');
 const { createMockSupabase } = require('./mock-supabase.js');
@@ -41,6 +42,7 @@ function nuevaCaja(nombre, sb) {
   const fijar = (id, v) => { const p = prod(id); p.stock = Math.round(v * 1000) / 1000; insumo(id).qty = p.stock; };
   return {
     nombre, st, sync,
+    fijarStock(id, v) { usar(); fijar(id, v); prod(id).sync_status = 'pending'; },
     async descargar() { usar(); const r = await sync.pullAllFromSupabase(BID); assert.strictEqual(r.ok, true, `${nombre}: descarga`); },
     async subir() { usar(); return sync.syncAll(); },
     stock: id => insumo(id).qty,
@@ -176,6 +178,31 @@ const nubeStock = (sb, id) => sb.__tables.productos.find(p => p.id === id).stock
   await A.subir(); await B.subir();
   assert.strictEqual(nubeStock(sb, 'nachos'), -2, 'sin ajustes fantasma');
   ok('vender de más entre dos cajas deja −2 en la nube y en las cajas (se ve el faltante, sin ajustes fantasma)');
+
+  // 10. Pedido por tandas (app.js): el stock se descuenta al guardar la tanda y la factura no vuelve a descontarlo en la
+  // caja, pero sube con sus cantidades completas (el trigger ventas_stock las descuenta). Aquí A guarda y B cobra.
+  const guardarTanda = (caja, id, qty) => { caja.fijarStock(id, caja.stock(id) - qty); };
+  const cobrarSinDescontar = (caja, id, qty) => {
+    global.state = caja.st;
+    const items = [{ productId: id, name: `Producto ${id}`, price: 5000, qty }];
+    caja.st.payments.push({ id: `pay-${caja.nombre}-${++seq}`, amount: 5000 * qty, method: 'Efectivo', payments: [], items, date: '2026-10-28', paidAt: Date.now(), sync_status: 'pending', pendingStock: caja.sync.stockItemsQty(items) });
+  };
+  await A.descargar(); await B.descargar();
+  const antes = nubeStock(sb, 'ron');
+  guardarTanda(A, 'ron', 3); await A.subir();
+  assert.strictEqual(nubeStock(sb, 'ron'), antes - 3, 'la tanda guardada llega a la nube');
+  await B.descargar();
+  assert.strictEqual(B.stock('ron'), antes - 3, 'y a la otra caja');
+  cobrarSinDescontar(B, 'ron', 3); await B.subir(); await A.descargar(); await B.descargar();
+  assert.strictEqual(nubeStock(sb, 'ron'), antes - 3, `nube: ${nubeStock(sb, 'ron')} (cobrar no descuenta otra vez)`);
+  assert.strictEqual(A.stock('ron'), antes - 3); assert.strictEqual(B.stock('ron'), antes - 3);
+  await A.subir(); await B.subir();
+  assert.strictEqual(nubeStock(sb, 'ron'), antes - 3, 'sin ajustes fantasma después');
+  // Misma caja, sin internet entre guardar y cobrar: la venta y la tanda suben juntas
+  guardarTanda(A, 'ron', 2); cobrarSinDescontar(A, 'ron', 2);
+  await A.subir(); await B.descargar(); await A.descargar();
+  assert.strictEqual(nubeStock(sb, 'ron'), antes - 5); assert.strictEqual(A.stock('ron'), antes - 5); assert.strictEqual(B.stock('ron'), antes - 5);
+  ok('pedido por tandas: descontar al guardar y cobrar en otra caja (o sin internet) deja la nube y las cajas cuadradas');
 
   // 9. Sin la tabla: modo anterior
   const viejo = createMockSupabase({ businessId: BID, seed: { negocios: [{ id: BID, nombre: 'Bar', configuracion: {}, activo: true }], productos: [producto('cerveza', 10)] } });

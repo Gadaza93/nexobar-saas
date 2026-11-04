@@ -199,16 +199,20 @@ async function testOrderModal() {
   console.log("\n7. Probando agregar producto a la comanda...");
   const sampleProd = posProducts[0];
   global.addProduct(sampleProd.id);
-  const curOrder = global.getOrder(global.state.currentOrderId);
-  console.log("   - Ítems en la comanda tras addProduct:", curOrder.items.length);
-  if (curOrder.items.length !== 1 || curOrder.items[0].productId !== sampleProd.id) {
-    throw new Error("No se agregó correctamente el producto al pedido.");
-  }
+  // El producto cae en la tanda en memoria: se ve en la cuenta, pero la mesa no se guarda hasta confirmar
   const ticketHtml = domElements['#ticketItems'].innerHTML;
-  if (!ticketHtml.includes(sampleProd.name)) {
-    throw new Error("El ticket actual no muestra el producto agregado.");
+  if (!ticketHtml.includes(sampleProd.name) || !ticketHtml.includes('Nueva tanda')) {
+    throw new Error("El ticket actual no muestra el producto en la nueva tanda.");
   }
-  console.log("   ✅ Producto agregado al ticket de comanda exitosamente.");
+  if (global.getOrder(global.state.currentOrderId)) {
+    throw new Error("La mesa no debe guardarse antes de «Guardar pedido» o «Cobrar».");
+  }
+  const curOrder = global.commitOrderDraft();
+  console.log("   - Ítems en la comanda tras confirmar la tanda:", curOrder.items.length);
+  if (curOrder.items.length !== 1 || curOrder.items[0].productId !== sampleProd.id || curOrder.rounds.length !== 1) {
+    throw new Error("No se guardó correctamente la tanda en el pedido.");
+  }
+  console.log("   ✅ Producto agregado a la tanda y guardado como ronda al confirmar.");
 
   // 8. Probar recuperación automática de ítems huérfanos de state.inventory
   console.log("\n8. Probando síntesis automática de insumos de inventario sin producto...");

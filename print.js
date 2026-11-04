@@ -22,6 +22,18 @@ function receiptLogo(image) {
   return typeof image === 'string' && /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,[a-z0-9+/=\s]+$/i.test(image)
     ? `<img class="logo" src="${image}" alt="" />` : '';
 }
+// En el papel cada producto sale una sola vez: lo pedido en varias rondas se suma (5 + 3 Águilas → 8 Águilas).
+// Mismo producto con otro precio va en su propia línea, para que cada importe cuadre. El historial por rondas queda en pantalla.
+function receiptLines(items) {
+  const lines = [], byKey = new Map();
+  items.forEach(item => {
+    const price = Number(item?.price) || 0, key = `${item?.productId || item?.name || ''}|${price}`;
+    const found = item?.productId || item?.name ? byKey.get(key) : null;
+    if (found) found.qty += Number(item.qty) || 0;
+    else { const line = { ...item, qty: Number(item?.qty) || 0, price }; lines.push(line); byKey.set(key, line); }
+  });
+  return lines;
+}
 function receiptLocation(customer) {
   const name = String(customer || '').trim();
   return !name || /barra|mostrador/i.test(name) ? 'Barra' : name;
@@ -82,7 +94,7 @@ function buildReceiptHtml(payment, { profile = {}, paperWidth = 80, demo = false
   const tenders = Array.isArray(pay.payments) && pay.payments.length ? pay.payments : [{ method: pay.method || 'Efectivo', amount: pay.amount }];
   const paidAt = pay.paidAt || pay.createdAt || now;
   const mark = demo ? `<div class="mark">${RECEIPT_DEMO_MARK}</div>` : '';
-  const itemsHtml = items.map(item => {
+  const itemsHtml = receiptLines(items).map(item => {
     const qty = Number(item.qty) || 0, price = Number(item.price) || 0;
     return `<div class="item"><div class="item-name">${receiptEscape(item.name)}</div><div class="row"><span class="num">${receiptQty.format(qty)} x ${receiptMoney.format(price)}</span><span class="num">${receiptMoney.format(Math.round(qty * price))}</span></div></div>`;
   }).join('');
@@ -182,5 +194,5 @@ globalThis.buildReceiptHtml = buildReceiptHtml;
 globalThis.buildShiftZHtml = buildShiftZHtml;
 globalThis.printReceipt = printReceipt;
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { buildReceiptHtml, buildShiftZHtml, printReceipt, printViaIframe, receiptLocation, RECEIPT_WIDTHS, RECEIPT_DEMO_MARK };
+  module.exports = { buildReceiptHtml, buildShiftZHtml, printReceipt, printViaIframe, receiptLines, receiptLocation, RECEIPT_WIDTHS, RECEIPT_DEMO_MARK };
 }

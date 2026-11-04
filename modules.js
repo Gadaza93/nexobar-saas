@@ -733,11 +733,16 @@ function applyCount() {
   saveState(); document.querySelector('#countDialog').close(); renderAll(); showToast(changed.length ? `Conteo aplicado: ${changed.length} diferencias ajustadas.` : 'Conteo aplicado: todo cuadra.');
 }
 
-/* Anular un pedido abierto deja constancia en la bitácora. */
+/* Anular un pedido abierto deja constancia en la bitácora y devuelve al inventario lo descontado al guardar sus tandas. */
 function deleteCurrentOrder() {
-  const order = getOrder(state.currentOrderId); if (!order) return;
-  if (order.items.length && !window.confirm(`¿Eliminar el pedido de ${order.tableName} por ${money.format(orderTotal(order))}?`)) return;
+  const order = getOrder(state.currentOrderId);
+  if (!order || !isOrderOpen(order)) { // solo hay una tanda sin guardar: se descarta, no hay nada que anular
+    if (typeof hasPendingDraft === 'function' && hasPendingDraft() && window.confirm('¿Deseas descartar los productos sin guardar?')) { document.querySelector('#orderDialog').close(); state.currentOrderId = null; }
+    return;
+  }
+  if (order.items.length && !window.confirm(`¿Eliminar el pedido de ${order.tableName} por ${money.format(orderTotal(order))}?${typeof hasPendingDraft === 'function' && hasPendingDraft() ? ' También se descartan los productos sin guardar.' : ''}`)) return;
   logAudit('Pedido eliminado', `${order.tableName} · ${money.format(orderTotal(order))} · ${order.items.length} productos`, { data: structuredClone(order) });
+  if (typeof returnAppliedStock === 'function') returnAppliedStock(order);
   state.orders = state.orders.filter(o => o.id !== order.id); if (typeof rememberRemovedOrder === 'function') rememberRemovedOrder(order.id); saveState(); if (globalThis.NexoSync?.deleteActiveOrder) globalThis.NexoSync.deleteActiveOrder(order.id).catch(() => {}); if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {}); document.querySelector('#orderDialog').close(); state.currentOrderId = null; renderAll(); showToast('Pedido eliminado.');
 }
 

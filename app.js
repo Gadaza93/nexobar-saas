@@ -384,6 +384,132 @@ function orderTotal(order) {
   return order.items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
 }
 
+/* ---------- Tandas (rondas) del pedido ----------
+   Lo que se toca en el catálogo cae en una tanda en memoria (orderDraft): no se guarda en IndexedDB ni sube a la nube.
+   «Guardar pedido» o «Cobrar» la confirman (commitOrderDraft): queda como una ronda con su hora en order.rounds, sus
+   productos se suman a order.items (la cuenta: lo que se cobra, se divide, se sincroniza y se imprime, unificado por
+   producto) y el stock se descuenta en ese momento. order.stockApplied guarda las unidades por producto ya descontadas,
+   para no descontarlas otra vez al cobrar; con la nube por movimientos no hace falta avisar (ver sync.js). Cerrar con la X
+   o Escape descarta la tanda. Un pedido nuevo no existe en state.orders hasta su primera tanda: así la limpieza de pedidos
+   vacíos (sincronización, tiempo real) no puede borrarlo con el modal abierto. Pedidos de versiones anteriores no traen
+   rondas ni stockApplied: su stock se descuenta al cobrar, como antes. Prueba: scratch/test-tandas-pedido.js */
+let orderDraft = null; // { orderId, shell, items: [], expanded: Set de rondas abiertas }
+const CLOSED_ORDER_STATUSES = ['paid', 'closed', 'cerrada', 'cancelada'];
+function isClosedOrder(order) { return CLOSED_ORDER_STATUSES.includes(String(order?.status || '').toLowerCase()); }
+function newOrderFor(table, extra = {}) {
+  return { id: uid('ord'), tableId: table.id, tableName: table.name, items: [], rounds: [], note: '', status: 'open', createdAt: Date.now(), shiftId: state.cashShift?.id || null, sync_status: 'pending', ...actor(), ...extra };
+}
+// El pedido en pantalla: el guardado o, si aún no existe (mesa nueva) o se cobró en otra caja, el que nacerá al guardar
+function currentOrder() {
+  const saved = getOrder(orderDraft ? orderDraft.orderId : state.currentOrderId);
+  if (!orderDraft) return saved;
+  return saved && !isClosedOrder(saved) ? saved : orderDraft.shell;
+}
+function startOrderDraft(order, shell) { orderDraft = { orderId: order.id, shell, items: [], expanded: new Set() }; state.currentOrderId = order.id; }
+function hasPendingDraft() { return Boolean(orderDraft && orderDraft.items.some(i => (Number(i.qty) || 0) > 0)); }
+function draftTotal() { return orderDraft ? orderDraft.items.reduce((sum, i) => sum + (Number(i.price) || 0) * (Number(i.qty) || 0), 0) : 0; }
+function discardOrderDraft() { orderDraft = null; }
+function orderLine(product) {
+  return { productId: product.id, name: product.name, price: product.price, cost: Number(product.cost || 0), category: product.category, qty: 1, inventoryId: product.inventoryId || `stock-${product.id}`, recipe: product.recipe || { [product.inventoryId || `stock-${product.id}`]: 1 } };
+}
+// Confirma la tanda: la registra como ronda, la suma a la cuenta y descuenta su stock. Devuelve el pedido guardado.
+function commitOrderDraft({ note } = {}) {
+  if (!orderDraft) return getOrder(state.currentOrderId) || null;
+  const items = orderDraft.items.filter(i => (Number(i.qty) || 0) > 0);
+  let order = getOrder(orderDraft.orderId);
+  if (!order || isClosedOrder(order)) {
+    if (!items.length) return null;
+    order = orderDraft.shell;
+    // La mesa se cobró (aquí o en otra caja) con el modal abierto: la tanda abre una cuenta nueva en la misma mesa
+    if (state.orders.includes(order) || isClosedOrder(order)) order = orderDraft.shell = newOrderFor({ id: order.tableId, name: order.tableName }, { isCustom: order.isCustom, customer: order.customer });
+    state.orders.push(order);
+  }
+  if (items.length) {
+    const at = Date.now();
+    order.rounds = Array.isArray(order.rounds) ? order.rounds : [];
+    order.rounds.push({ id: uid('rnd'), at, by: actor().userName || '', items: items.map(i => ({ productId: i.productId, name: i.name, price: i.price, qty: Number(i.qty) })) });
+    items.forEach(item => {
+      const same = order.items.find(i => i.productId === item.productId);
+      if (same) same.qty = Number(same.qty) + Number(item.qty);
+      else order.items.push(structuredClone(item));
+    });
+    deductInventory({ items });
+    const applied = order.stockApplied && typeof order.stockApplied === 'object' ? order.stockApplied : (order.stockApplied = {});
+    items.forEach(i => { applied[i.productId] = Number(((Number(applied[i.productId]) || 0) + Number(i.qty)).toFixed(3)); });
+    orderDraft.items = [];
+  }
+  orderDraft.orderId = order.id;
+  state.currentOrderId = order.id;
+  const noteChanged = note !== undefined && note !== (order.note || '');
+  if (!items.length && !noteChanged) return order;
+  if (noteChanged) order.note = note;
+  forgetRemovedOrder(order.id);
+  touchOrder(order);
+  saveState();
+  if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
+  return order;
+}
+// Al cobrar: las unidades ya descontadas al guardar su tanda no se descuentan otra vez. Devuelve lo que falta descontar.
+function takeAppliedStock(order, items) {
+  const applied = order?.stockApplied;
+  if (!applied || typeof applied !== 'object') return items;
+  const rest = [];
+  items.forEach(item => {
+    const id = item.productId, qty = Number(item.qty) || 0;
+    const covered = id && qty > 0 ? Math.min(qty, Number(applied[id]) || 0) : 0;
+    if (covered) { applied[id] = Number((applied[id] - covered).toFixed(3)); if (!(applied[id] > 0)) delete applied[id]; }
+    if (qty - covered !== 0) rest.push(covered ? { ...item, qty: qty - covered } : item);
+  });
+  return rest;
+}
+// Anular un pedido (o quitar productos ya guardados) devuelve al inventario lo que se descontó al guardar sus tandas
+function returnAppliedStock(order, productId = null, qty = null) {
+  const applied = order?.stockApplied;
+  if (!applied || typeof applied !== 'object') return;
+  const ids = productId ? [productId] : Object.keys(applied);
+  const back = [];
+  ids.forEach(id => {
+    const q = Math.min(Number(applied[id]) || 0, qty == null ? Infinity : qty);
+    if (!(q > 0)) return;
+    const line = (order.items || []).find(i => i.productId === id) || {};
+    back.push({ ...line, productId: id, qty: -q });
+    applied[id] = Number((applied[id] - q).toFixed(3));
+    if (!(applied[id] > 0)) delete applied[id];
+  });
+  if (back.length) deductInventory({ items: back });
+}
+// Rondas para mostrar, cuadradas con la cuenta: lo ya cobrado o quitado sale de las rondas más antiguas y lo que la
+// cuenta tiene sin ronda (pedidos de versiones anteriores, cajas sin actualizar) se muestra aparte, con la hora de apertura
+function orderRoundsView(order) {
+  const keyOf = i => String(i.productId || i.name || '');
+  const pending = new Map(), recorded = new Map();
+  (order?.items || []).forEach(i => pending.set(keyOf(i), (pending.get(keyOf(i)) || 0) + (Number(i.qty) || 0)));
+  const rounds = Array.isArray(order?.rounds) ? order.rounds : [];
+  rounds.forEach(r => (r.items || []).forEach(i => recorded.set(keyOf(i), (recorded.get(keyOf(i)) || 0) + (Number(i.qty) || 0))));
+  const removed = new Map([...recorded].map(([k, q]) => [k, Math.max(0, q - (pending.get(k) || 0))]));
+  const view = rounds.map((r, idx) => ({
+    id: r.id, number: idx + 1, at: r.at, by: r.by,
+    items: (r.items || []).map(i => {
+      const k = keyOf(i), cut = Math.min(Number(i.qty) || 0, removed.get(k) || 0);
+      removed.set(k, (removed.get(k) || 0) - cut);
+      return { ...i, qty: (Number(i.qty) || 0) - cut };
+    }).filter(i => i.qty > 0)
+  })).filter(r => r.items.length);
+  const extraLeft = new Map([...pending].map(([k, q]) => [k, Math.max(0, q - (recorded.get(k) || 0))]));
+  const extra = (order?.items || []).map(i => {
+    const k = keyOf(i), take = Math.min(Number(i.qty) || 0, extraLeft.get(k) || 0);
+    extraLeft.set(k, (extraLeft.get(k) || 0) - take);
+    return { ...i, qty: take };
+  }).filter(i => i.qty > 0);
+  if (extra.length) view.unshift({ id: '', number: 0, at: order.createdAt, by: '', items: extra, legacy: true });
+  return view;
+}
+// Mesas y cuentas abiertas: dinero por cobrar en el local
+function openOrdersSummary() {
+  const orders = activeOrders();
+  return { count: orders.length, total: orders.reduce((sum, o) => sum + orderPending(o), 0) };
+}
+
 /* ---------- Cuenta dividida en partes iguales ----------
    El avance vive en el pedido (order.equalSplit = { parts, baseTotal, paid: [{ part, amount, paymentId, paidAt }] }), que se
    guarda en IndexedDB: sobrevive a recargas y a cerrar el diálogo. Los productos no se fraccionan: cada parte que no salda la
@@ -585,6 +711,10 @@ function renderStats() {
   document.querySelector('#activeItems').textContent = `${active.reduce((s,o)=>s+o.items.reduce((n,i)=>n+(Number(i.qty)||0),0),0)} bebidas y snacks`;
   document.querySelector('#openOrdersCount').textContent = active.length;
   document.querySelector('#cashExpected').textContent = isShiftOpen() ? money.format(expectedCash()) : 'Caja cerrada';
+  // Barra inferior del salón: dinero por cobrar en todas las mesas y cuentas abiertas (se actualiza con cada renderAll)
+  const open = openOrdersSummary(), openTotalEl = document.querySelector('#openMoneyTotal'), openCountEl = document.querySelector('#openMoneyCount');
+  if (openTotalEl) openTotalEl.textContent = money.format(open.total);
+  if (openCountEl) openCountEl.textContent = `${open.count} ${open.count === 1 ? 'cuenta abierta' : 'cuentas abiertas'}`;
 }
 function renderZones() { const zones = ['Todas', ...new Set(state.tables.map(t => t.zone))]; document.querySelector('#zoneFilter').innerHTML = zones.map(z => `<button class="segment ${state.zone === z ? 'active':''}" data-zone="${escapeHtml(z)}">${escapeHtml(z)}</button>`).join(''); }
 function elapsedLabel(ts) { const mins = Math.max(0, Math.floor((Date.now() - (ts || Date.now())) / 60000)); if (mins < 1) return 'Recién abierta'; if (mins < 60) return `Abierta hace ${mins} min`; const h = Math.floor(mins / 60), m = mins % 60; return `Abierta hace ${h} h${m ? ` ${m} min` : ''}`; }
@@ -709,31 +839,19 @@ function openOrder(tableId = null) {
   else table = { id: 'walkin', name: 'Venta en barra', zone: 'Barra' };
   if (!table) table = { id: tableId || 'walkin', name: 'Mesa', zone: 'Salón' };
 
+  // Mesa libre: el pedido nace en memoria y solo entra en state.orders al guardar su primera tanda
   let order = activeOrderForTable(table.id);
   if (!order) {
     if (isDemoMode() && isDemoLimitReached()) {
       showDemoLimitModal();
       return;
     }
-    order = {
-      id: uid('ord'),
-      tableId: table.id,
-      tableName: table.name,
-      items: [],
-      note: '',
-      status: 'open',
-      createdAt: Date.now(),
-      shiftId: state.cashShift?.id || null,
-      sync_status: 'pending',
-      ...actor()
-    };
-    state.orders.push(order);
+    order = newOrderFor(table);
     if (isDemoMode()) {
       incrementDemoTransactionCount();
     }
-    saveState();
   }
-  state.currentOrderId = order.id;
+  startOrderDraft(order, getOrder(order.id) ? newOrderFor(table) : order);
 
   // Garantizar pestaña 'Todos' y buscador limpio por defecto al abrir
   state.activeCategory = 'Todos';
@@ -758,11 +876,12 @@ function openOrder(tableId = null) {
 }
 globalThis.openOrder = openOrder;
 
-function openCustomOrder(orderId) {
+// newOrder: cuenta personalizada recién creada, que aún no está en state.orders
+function openCustomOrder(orderId, newOrder = null) {
   if (!checkShiftIsOpen()) return;
-  const order = getOrder(orderId);
+  const order = newOrder || getOrder(orderId);
   if (!order) return;
-  state.currentOrderId = order.id;
+  startOrderDraft(order, newOrder || newOrderFor({ id: order.tableId, name: order.tableName }, { isCustom: order.isCustom, customer: order.customer }));
 
   // Garantizar pestaña 'Todos' y buscador limpio por defecto al abrir
   state.activeCategory = 'Todos';
@@ -822,6 +941,13 @@ function mergeOrderInto(source, target) {
   target.paidAmount = (Number(target.paidAmount) || 0) + (Number(source.paidAmount) || 0); // cobros por productos ya hechos en cualquiera de las dos
   target.createdAt = Math.min(target.createdAt || Date.now(), source.createdAt || Date.now());
   target.mergedFrom = [...(target.mergedFrom || []), { orderId: source.id, tableName: source.tableName, amount: added, at: Date.now() }];
+  // Rondas y stock ya descontado viajan con los productos: las rondas en orden de hora, cada una con su mesa de origen
+  const rounds = [...(target.rounds || []), ...(source.rounds || []).map(r => ({ ...structuredClone(r), from: source.tableName }))];
+  if (rounds.length) target.rounds = rounds.sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0));
+  Object.entries(source.stockApplied || {}).forEach(([id, q]) => {
+    target.stockApplied = target.stockApplied || {};
+    target.stockApplied[id] = Number(((Number(target.stockApplied[id]) || 0) + (Number(q) || 0)).toFixed(3));
+  });
   touchOrder(target);
   state.orders = state.orders.filter(o => o.id !== source.id);
   rememberRemovedOrder(source.id); // la cuenta de origen no debe volver desde la nube
@@ -849,6 +975,7 @@ function moveOrderToTable(orderId, tableId, { confirmMerge = message => window.c
   return result;
 }
 function openMoveOrderDialog() {
+  if (hasPendingDraft()) { commitOrderDraft(); renderOrderTicket(); } // se mueve la cuenta completa, con la tanda pendiente
   const order = getOrder(state.currentOrderId);
   if (!canMoveOrder(order)) return showToast('Solo se pueden mover pedidos de mesa que tengan productos.');
   const { free, occupied } = moveTargets(order), locked = splitInProgress(order);
@@ -868,6 +995,7 @@ function chooseMoveTarget(tableId) {
   const result = moveOrderToTable(state.currentOrderId, tableId);
   if (!result.ok) { if (!result.cancelled) showToast(result.error); return; }
   document.querySelector('#moveOrderDialog')?.close();
+  if (orderDraft) startOrderDraft(result.order, newOrderFor({ id: result.order.tableId, name: result.order.tableName }));
   const table = state.tables.find(t => t.id === result.order.tableId);
   const zoneEl = document.querySelector('#orderZone'); if (zoneEl) zoneEl.textContent = (table?.zone || 'SALÓN').toUpperCase();
   const titleEl = document.querySelector('#orderTitle'); if (titleEl) titleEl.textContent = result.order.tableName;
@@ -884,28 +1012,13 @@ function createCustomOrder() {
   }
   const name = document.querySelector('#customOrderName').value.trim();
   if (!name) return showToast('Escribe un nombre para la cuenta.');
-  const order = {
-    id: uid('ord'),
-    tableId: uid('custom'),
-    tableName: name,
-    isCustom: true,
-    items: [],
-    note: '',
-    status: 'open',
-    createdAt: Date.now(),
-    shiftId: state.cashShift?.id || null,
-    sync_status: 'pending',
-    ...actor()
-  };
-  state.orders.push(order);
+  // Igual que una mesa libre: la cuenta queda guardada con su primera tanda
+  const order = newOrderFor({ id: uid('custom'), name }, { isCustom: true });
   if (isDemoMode()) {
     incrementDemoTransactionCount();
   }
-  saveState();
-  if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
   document.querySelector('#customOrderDialog').close();
-  renderAll();
-  openCustomOrder(order.id);
+  openCustomOrder(null, order);
 }
 function productVisual(product) {
   if (!product) return '🍾';
@@ -914,14 +1027,14 @@ function productVisual(product) {
 }
 globalThis.productVisual = productVisual;
 
+// Catálogo y cuenta se dibujan por separado: tocar un producto solo redibuja la cuenta. Redibujar la grilla en cada
+// clic la encogía mientras se decodificaban las fotos y el scroll saltaba al producto vecino.
 function renderOrderDialog() {
-  const order = getOrder(state.currentOrderId);
-  if (!order) return;
-
-  // «Mover / Unir»: solo pedidos de mesa (no barra ni cuentas personalizadas) con productos
-  const moveBtn = document.querySelector('#moveOrderButton');
-  if (moveBtn) { const movable = canMoveOrder(order); moveBtn.disabled = !movable; moveBtn.title = movable ? 'Trasladar a una mesa libre o unir con una ocupada' : (isTableOrder(order) ? 'Agrega productos para poder mover la cuenta' : 'Solo disponible para pedidos de mesa'); }
-
+  if (!currentOrder()) return;
+  renderOrderCatalog();
+  renderOrderTicket();
+}
+function renderOrderCatalog() {
   const catTabsEl = document.querySelector('#categoryTabs');
   const prodGridEl = document.querySelector('#productGrid');
   const searchInput = document.querySelector('#productSearch');
@@ -1016,32 +1129,65 @@ function renderOrderDialog() {
       `;
   }
 
-  // 5. Renderizar ticket items
+}
+
+const roundTime = ts => new Intl.DateTimeFormat('es-CO', { hour: 'numeric', minute: '2-digit' }).format(new Date(ts || Date.now()));
+function renderOrderTicket() {
+  const order = currentOrder();
+  if (!order) return;
+  const draft = orderDraft ? orderDraft.items.filter(i => (Number(i.qty) || 0) > 0) : [];
+
+  // «Mover / Unir»: solo pedidos de mesa (no barra ni cuentas personalizadas) con productos
+  const moveBtn = document.querySelector('#moveOrderButton');
+  if (moveBtn) { const movable = canMoveOrder(order) || (isTableOrder(order) && draft.length > 0); moveBtn.disabled = !movable; moveBtn.title = movable ? 'Trasladar a una mesa libre o unir con una ocupada' : (isTableOrder(order) ? 'Agrega productos para poder mover la cuenta' : 'Solo disponible para pedidos de mesa'); }
+
   const ticketEl = document.querySelector('#ticketItems');
   if (ticketEl) {
-    ticketEl.innerHTML = order.items.length
-      ? order.items.map(item => `
+    const draftHtml = draft.length ? `
+      <section class="ticket-round ticket-round-draft">
+        <header class="ticket-round-head"><strong>Nueva tanda</strong><span>Pendiente por guardar · ${money.format(draftTotal())}</span></header>
+        ${draft.map(item => `
           <div class="ticket-item">
-            <div>
-              <strong>${escapeHtml(item.name)}</strong>
-              ${item.category ? `<small class="muted" style="display:block;font-size:11px;">${escapeHtml(item.category)}</small>` : ''}
-            </div>
+            <div><strong>${escapeHtml(item.name)}</strong>${item.category ? `<small class="muted ticket-item-cat">${escapeHtml(item.category)}</small>` : ''}</div>
             <span class="item-price">${money.format((item.price || 0) * (item.qty || 1))}</span>
             <div class="quantity-control">
               <button type="button" data-item-change="${escapeHtml(item.productId)}" data-delta="-1" aria-label="Disminuir">−</button>
               <span>${item.qty}</span>
               <button type="button" data-item-change="${escapeHtml(item.productId)}" data-delta="1" aria-label="Aumentar">+</button>
             </div>
-          </div>
-        `).join('')
-      : '<p class="empty-ticket">Agrega productos para iniciar el pedido.</p>';
+          </div>`).join('')}
+      </section>` : '';
+    // Rondas guardadas: la última abierta; las demás plegadas salvo que el usuario las haya desplegado
+    const rounds = orderRoundsView(order), lastId = rounds.length ? rounds[rounds.length - 1].id : null;
+    const canRemove = typeof can !== 'function' || can('cancelOrder');
+    const roundsHtml = rounds.map(round => {
+      const key = round.id || 'legacy', open = round.id === lastId || orderDraft?.expanded?.has(key);
+      const title = round.legacy ? `Pedido · ${roundTime(round.at)}` : `Ronda ${round.number} · ${roundTime(round.at)}`;
+      const total = round.items.reduce((sum, i) => sum + (Number(i.price) || 0) * (Number(i.qty) || 0), 0);
+      return `
+      <details class="ticket-round" data-round="${escapeHtml(key)}" ${open ? 'open' : ''}>
+        <summary class="ticket-round-head"><strong>${escapeHtml(title)}</strong><span>${round.by ? `${escapeHtml(round.by)} · ` : ''}${money.format(total)}</span></summary>
+        ${round.items.map(item => `
+          <div class="ticket-item ticket-item-saved">
+            <div><strong>${item.qty} × ${escapeHtml(item.name)}</strong></div>
+            <span class="item-price">${money.format((item.price || 0) * (item.qty || 1))}</span>
+            ${canRemove ? `<button type="button" class="ticket-remove-saved" data-saved-remove="${escapeHtml(item.productId || '')}" data-round-id="${escapeHtml(round.id)}" aria-label="Quitar una unidad de ${escapeHtml(item.name)}" title="Quitar una unidad (devuelve el stock)">−</button>` : ''}
+          </div>`).join('')}
+      </details>`;
+    }).join('');
+    ticketEl.innerHTML = draftHtml + roundsHtml || '<p class="empty-ticket">Agrega productos para iniciar el pedido.</p>';
   }
 
   const orderTotalEl = document.querySelector('#orderTotal');
-  if (orderTotalEl) orderTotalEl.textContent = money.format(orderPending(order));
+  if (orderTotalEl) orderTotalEl.textContent = money.format(orderPending(order) + draftTotal());
+  const draftNote = document.querySelector('#draftNote');
+  if (draftNote) {
+    draftNote.hidden = !draft.length;
+    draftNote.textContent = draft.length ? `Incluye ${money.format(draftTotal())} de la nueva tanda, sin guardar.` : '';
+  }
 
   const deleteBtn = document.querySelector('#deleteOrderButton');
-  if (deleteBtn) deleteBtn.style.visibility = order.items.length ? 'visible' : 'hidden';
+  if (deleteBtn) deleteBtn.style.visibility = (order.items.length || draft.length) ? 'visible' : 'hidden';
 
   const paidNote = document.querySelector('#paidNote');
   if (paidNote) {
@@ -1054,39 +1200,81 @@ function renderOrderDialog() {
   const twBottom = document.querySelector('#ticketWatermarkBottom');
   if (twTop) twTop.hidden = !isDemo;
   if (twBottom) twBottom.hidden = !isDemo;
+  if (typeof globalThis.updateMobileOrderBar === 'function') globalThis.updateMobileOrderBar();
 }
 globalThis.renderOrderDialog = renderOrderDialog;
+globalThis.renderOrderTicket = renderOrderTicket;
 globalThis.renderPOSProducts = renderOrderDialog;
 globalThis.loadProductsToOrder = renderOrderDialog;
 
+// Los productos tocados caen en la tanda en memoria: nada se guarda ni sube hasta «Guardar pedido» o «Cobrar»
 function addProduct(productId) {
-  const order = getOrder(state.currentOrderId);
-  const prods = getPOSProducts();
-  const product = prods.find(p => p.id === productId);
-  if (!order || !product) return;
-  const found = order.items.find(i => i.productId === productId);
+  if (!orderDraft || !currentOrder()) return;
+  const product = getPOSProducts().find(p => p.id === productId);
+  if (!product) return;
+  const found = orderDraft.items.find(i => i.productId === productId);
   if (found) found.qty++;
-  else {
-    order.items.push({
-      productId: product.id,
-      name: product.name,
-      price: product.price,
-      cost: Number(product.cost || 0),
-      category: product.category,
-      qty: 1,
-      inventoryId: product.inventoryId || `stock-${product.id}`,
-      recipe: product.recipe || { [product.inventoryId || `stock-${product.id}`]: 1 }
-    });
-  }
-  order.sync_status = 'pending';
-  order.updatedAt = Date.now();
-  saveState();
-  if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
-  renderOrderDialog();
+  else orderDraft.items.push(orderLine(product));
+  renderOrderTicket();
 }
 globalThis.addProduct = addProduct;
-function changeItem(productId, delta) { const order=getOrder(state.currentOrderId); const item=order?.items.find(i=>i.productId===productId); if(!item)return; item.qty+=Number(delta); if(item.qty<=0)order.items=order.items.filter(i=>i!==item); order.sync_status='pending'; order.updatedAt=Date.now(); saveState(); if(globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(()=>{}); renderOrderDialog(); }
-function saveOrder() { const order=getOrder(state.currentOrderId); if(!order)return; order.note=document.querySelector('#orderNote').value.trim(); order.sync_status='pending'; order.updatedAt=Date.now(); if(!order.items.length){state.orders=state.orders.filter(o=>o.id!==order.id);saveState();if(globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(()=>{});document.querySelector('#orderDialog').close();state.currentOrderId=null;renderAll();return showToast('Pedido vacío descartado.');} saveState();if(globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(()=>{});document.querySelector('#orderDialog').close();state.currentOrderId=null;renderAll();showToast('Pedido guardado. Queda abierto hasta cobrarlo.'); }
+function changeItem(productId, delta) {
+  const item = orderDraft?.items.find(i => i.productId === productId);
+  if (!item) return;
+  item.qty += Number(delta);
+  if (item.qty <= 0) orderDraft.items = orderDraft.items.filter(i => i !== item);
+  renderOrderTicket();
+}
+// Quitar una unidad ya guardada (corrección de un error al pedir): devuelve su stock y queda en la bitácora
+function removeSavedItem(productId, roundId) {
+  if (typeof can === 'function' && !can('cancelOrder')) return showToast('Tu rol no tiene permiso para quitar productos ya guardados.');
+  const order = getOrder(state.currentOrderId);
+  const item = order?.items.find(i => i.productId === productId);
+  if (!order || !item || isClosedOrder(order)) return;
+  if (splitInProgress(order)) return showToast('Esta cuenta ya se está cobrando en partes iguales: termina de cobrarla antes de quitar productos.');
+  if (!window.confirm(`¿Quitar 1 × ${item.name} de la cuenta? Se devuelve al inventario.`)) return;
+  item.qty = Number(item.qty) - 1;
+  if (item.qty <= 0) order.items = order.items.filter(i => i !== item);
+  const round = (order.rounds || []).find(r => r.id === roundId), line = round?.items.find(i => i.productId === productId);
+  if (line) { line.qty = Number(line.qty) - 1; if (line.qty <= 0) round.items = round.items.filter(i => i !== line); }
+  returnAppliedStock(order, productId, 1);
+  if (typeof logAudit === 'function') logAudit('Producto quitado', `${order.tableName} · 1 × ${item.name} · ${money.format(Number(item.price) || 0)}`);
+  if (!order.items.some(i => (Number(i.qty) || 0) > 0)) {
+    // Sin productos la cuenta deja de existir (como «Eliminar»): la mesa queda libre
+    state.orders = state.orders.filter(o => o.id !== order.id);
+    rememberRemovedOrder(order.id);
+    if (globalThis.NexoSync?.deleteActiveOrder) globalThis.NexoSync.deleteActiveOrder(order.id).catch(() => {});
+  } else touchOrder(order);
+  saveState();
+  if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
+  renderOrderTicket(); renderAll();
+}
+function saveOrder() {
+  const note = document.querySelector('#orderNote')?.value.trim() ?? '';
+  const hadDraft = hasPendingDraft();
+  const order = commitOrderDraft({ note });
+  document.querySelector('#orderDialog')?.close();
+  discardOrderDraft();
+  state.currentOrderId = null;
+  renderAll();
+  if (!order) return showToast('No había productos para guardar.');
+  showToast(hadDraft ? 'Tanda guardada. La cuenta queda abierta hasta cobrarla.' : 'Pedido guardado. Queda abierto hasta cobrarlo.');
+}
+// X o Escape: sin tanda pendiente cierra de inmediato; con tanda pide confirmar y la descarta sin guardar nada.
+// Devuelve true si el modal puede cerrarse.
+function requestCloseOrderDialog() {
+  if (hasPendingDraft() && !window.confirm('¿Deseas descartar los productos sin guardar?')) return false;
+  discardOrderDraft();
+  state.currentOrderId = null;
+  return true;
+}
+globalThis.saveOrder = saveOrder;
+globalThis.requestCloseOrderDialog = requestCloseOrderDialog;
+globalThis.commitOrderDraft = commitOrderDraft;
+globalThis.currentOrder = currentOrder;
+globalThis.hasPendingDraft = hasPendingDraft;
+globalThis.openOrdersSummary = openOrdersSummary;
+globalThis.orderRoundsView = orderRoundsView;
 const PAYMENT_METHODS = ['Efectivo', 'Nequi', 'Daviplata', 'Tarjeta / Datáfono', 'Transferencia'];
 let activePaymentMethod = 'Efectivo';
 let currentCheckout = null;
@@ -1099,6 +1287,8 @@ let splitBillData = {
 
 function openPayment(customCheckout = null) {
   if (!requireOpenShift()) return;
+  // «Cobrar» desde el modal confirma primero la tanda pendiente (queda guardada aunque luego se cancele el cobro)
+  if (!customCheckout && orderDraft) commitOrderDraft({ note: document.querySelector('#orderNote')?.value.trim() ?? undefined });
   const order = getOrder(state.currentOrderId);
   if (!order && !customCheckout) return;
   if (!customCheckout && !order?.items.length) return showToast('Agrega al menos un producto antes de cobrar.');
@@ -1357,7 +1547,8 @@ function confirmPayment() {
   }
 
   let splitEntries = null; // partes iguales cobradas en este pago (se enlazan a la factura más abajo)
-  deductInventory({ items: currentCheckout.items });
+  // Solo se descuenta lo que no se descontó al guardar su tanda (pedidos de versiones anteriores: todo)
+  deductInventory({ items: takeAppliedStock(order, currentCheckout.items) });
 
   if (currentCheckout.type === 'full') {
     order.items = [];
@@ -1426,7 +1617,9 @@ function confirmPayment() {
   }
   state.payments.push(newPayment);
   saveState();
-  if (globalThis.NexoSync?.deleteActiveOrder) {
+  // Solo una cuenta saldada sale de pedidos_activos. Borrar la fila tras un cobro parcial hacía que el aviso de borrado
+  // (tiempo real) volviera a esta caja y diera la mesa por cobrada, perdiendo los productos que faltaban por pagar.
+  if (order.status === 'paid' && globalThis.NexoSync?.deleteActiveOrder) {
     globalThis.NexoSync.deleteActiveOrder(order.id).catch(() => {});
   }
   if (globalThis.NexoSync?.syncOrders) {
@@ -1467,6 +1660,7 @@ function confirmPayment() {
 
 function openSplitBill() {
   if (!requireOpenShift()) return;
+  if (orderDraft) commitOrderDraft(); // dividir es cobrar: la tanda pendiente se confirma primero
   const order = getOrder(state.currentOrderId);
   if (!order || !order.items.length) return showToast('No hay productos en la mesa para dividir.');
 
@@ -2103,6 +2297,20 @@ function importBackup(file) { const reader=new FileReader();reader.onload=()=>{t
 function escapeHtml(str){return String(str).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 globalThis.escapeHtml = escapeHtml;
 
+// Escape en el pedido: misma regla que la X. Al cerrarse por cualquier vía (guardar, cobrar, eliminar) la tanda se descarta.
+(function bindOrderDialogClose() {
+  const dialog = typeof document !== 'undefined' && typeof document.querySelector === 'function' ? document.querySelector('#orderDialog') : null;
+  if (!dialog || typeof dialog.addEventListener !== 'function') return;
+  dialog.addEventListener('cancel', event => { if (!requestCloseOrderDialog()) event.preventDefault(); });
+  dialog.addEventListener('close', () => { if (!dialog.open) discardOrderDraft(); }); // el evento llega después: si ya se abrió otra mesa, su tanda se conserva
+  // Rondas plegables: se recuerda cuáles abrió el usuario para que no se plieguen al redibujar la cuenta
+  dialog.addEventListener('toggle', event => {
+    const key = event.target?.dataset?.round;
+    if (!key || !orderDraft) return;
+    if (event.target.open) orderDraft.expanded.add(key); else orderDraft.expanded.delete(key);
+  }, true);
+})();
+
 document.addEventListener('click', event => {
   const target = event.target.closest('button');
   if (!target) return;
@@ -2120,6 +2328,7 @@ document.addEventListener('click', event => {
   if (target.id === 'moveOrderButton') openMoveOrderDialog();
   if (target.dataset.moveTo) chooseMoveTarget(target.dataset.moveTo);
   if (target.dataset.itemChange) changeItem(target.dataset.itemChange, target.dataset.delta);
+  if (target.dataset.savedRemove !== undefined) removeSavedItem(target.dataset.savedRemove, target.dataset.roundId);
   if (target.dataset.method) { state.paymentMethod = target.dataset.method; renderPaymentOptions(); updateTenderChange(); }
   if (target.dataset.payMethod) { activePaymentMethod = target.dataset.payMethod; state.paymentMethod = activePaymentMethod; refreshPaymentUI(); }
   if (target.id === 'addTenderButton') addPaymentTender();
@@ -2139,16 +2348,8 @@ document.addEventListener('click', event => {
   if (target.dataset.adjust) openInventoryDialog(target.dataset.adjust);
   if (target.dataset.close) {
     const dlgId = target.dataset.close;
-    if (dlgId === 'orderDialog' && state.currentOrderId) {
-      const curOrder = getOrder(state.currentOrderId);
-      if (curOrder && (!curOrder.items || curOrder.items.length === 0 || !curOrder.items.some(i => (Number(i.qty) || 0) > 0))) {
-        state.orders = state.orders.filter(o => o.id !== curOrder.id);
-        state.currentOrderId = null;
-        saveState();
-        if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
-        renderAll();
-      }
-    }
+    // X del pedido: sin tanda pendiente cierra; con tanda pide confirmar el descarte (nada se guarda)
+    if (dlgId === 'orderDialog' && !requestCloseOrderDialog()) return;
     document.querySelector(`#${dlgId}`)?.close();
   }
   if (target.dataset.payCustomOrder) {
@@ -2160,7 +2361,9 @@ document.addEventListener('click', event => {
     const oId = target.dataset.deleteCustomOrder;
     const ord = getOrder(oId);
     if (ord && window.confirm(`¿Eliminar o anular la cuenta "${ord.tableName || 'Cuenta'}"?`)) {
+      returnAppliedStock(ord); // lo descontado al guardar sus tandas vuelve al inventario
       state.orders = state.orders.filter(o => o.id !== oId);
+      rememberRemovedOrder(oId);
       saveState();
       if (globalThis.NexoSync?.deleteActiveOrder) globalThis.NexoSync.deleteActiveOrder(oId).catch(() => {});
       if (globalThis.NexoSync?.syncOrders) globalThis.NexoSync.syncOrders().catch(() => {});
@@ -2760,9 +2963,11 @@ document.addEventListener('click',e=>{const b=e.target.closest('[data-report-ran
 // ===== Modal de comanda: pestañas móviles + barra flotante =====
 (function setupOrderModalMobile() {
   function updateMobileOrderBar() {
-    const order = getOrder(state.currentOrderId);
-    const count = order ? order.items.reduce(function(s, i) { return s + (i.qty || 1); }, 0) : 0;
-    const total = order ? orderPending(order) : 0;
+    // Cuenta guardada más la tanda pendiente (lo que se ve en el panel «Cuenta»)
+    const order = currentOrder();
+    const sumQty = function(items) { return items.reduce(function(s, i) { return s + (Number(i.qty) || 0); }, 0); };
+    const count = (order ? sumQty(order.items || []) : 0) + (orderDraft ? sumQty(orderDraft.items) : 0);
+    const total = (order ? orderPending(order) : 0) + draftTotal();
 
     const countEl = document.querySelector('#mobileOrderCount');
     const barCount = document.querySelector('#mobileBarCount');
