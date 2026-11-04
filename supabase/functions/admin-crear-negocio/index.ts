@@ -6,7 +6,7 @@
 // hasta el servicio de autenticación (auth.admin.createUser), que la guarda con su propio hash.
 // Seguridad:
 //   - Solo una sesión con app_metadata.role = 'superadmin' (validada con auth.getUser, no leyendo el JWT a mano).
-//   - La cuenta nace con must_change_password (trigger marcar_contrasena_temporal, paso 11 de CLAUDE.md).
+//   - La cuenta nace con app_metadata.must_change_password = true (puesta aquí; ver el paso 3 más abajo).
 //   - Si la cuenta no se puede crear, se borra el negocio recién creado: no quedan negocios sin cuenta.
 // Los errores responden 200 con { ok: false, error: { code, message } } para que el panel muestre el mensaje.
 // Se publica con verify_jwt = false: la sesión se valida aquí dentro.
@@ -78,12 +78,14 @@ Deno.serve(async (req) => {
     return fallo(negocioError.code ?? 'P0001', negocioError.message);
   }
 
-  // 3. La cuenta de la terminal: business_id en app_metadata; el trigger le pone la contraseña temporal obligatoria
+  // 3. La cuenta de la terminal: business_id y contraseña temporal obligatoria en app_metadata. La marca va explícita:
+  // createUser inserta la cuenta y escribe app_metadata después, así que el trigger marcar_contrasena_temporal
+  // (BEFORE INSERT) no ve el business_id y no la pondría.
   const { error: userError } = await supabase.auth.admin.createUser({
     email: datos.p_email,
     password: datos.p_password,
     email_confirm: true,
-    app_metadata: { business_id: datos.p_id },
+    app_metadata: { business_id: datos.p_id, must_change_password: true },
     user_metadata: { nombre: datos.p_nombre },
   });
   if (userError) {

@@ -172,12 +172,14 @@ async function provisionar(compra: Compra): Promise<Provision> {
   }
   if (!negocioId) throw new Error('No se pudo generar un ID de comercio único');
 
-  // La contraseña real se asigna al enviar las credenciales (ver notificarCliente)
+  // La contraseña real se asigna al enviar las credenciales (ver notificarCliente). La marca de contraseña temporal
+  // va explícita: createUser escribe app_metadata después de insertar la cuenta y el trigger marcar_contrasena_temporal
+  // (BEFORE INSERT) no alcanza a verla.
   const { data: creado, error: userError } = await supabase.auth.admin.createUser({
     email: compra.email,
     password: contrasenaTemporal(24),
     email_confirm: true,
-    app_metadata: { business_id: negocioId },
+    app_metadata: { business_id: negocioId, must_change_password: true },
     user_metadata: { nombre: compra.comercio },
   });
 
