@@ -548,17 +548,17 @@ function setCatalogCount(selector, shown, total, noun) { const el = document.que
 function renderProducts() {
   const tbody = document.querySelector('#productsTable');
   if (!state.products || state.products.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="muted" style="text-align:center;padding:36px 16px;font-size:14px;">No hay productos registrados. Crea uno nuevo o importa tu archivo Excel.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="muted" style="text-align:center;padding:36px 16px;font-size:14px;">No hay productos registrados. Crea uno nuevo o importa tu archivo Excel.</td></tr>';
     return;
   }
   const f = catalogFilter.products; f.cat = fillCategoryFilter('#productCategoryFilter', f.cat);
   const list = state.products.filter(p => (!f.cat || (p.category || 'Sin categoría') === f.cat) && matchesSearch(`${p.name} ${p.category || ''}`, f.q));
   setCatalogCount('#productCount', list.length, state.products.length, 'productos');
-  if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" class="muted" style="text-align:center;padding:28px 16px;font-size:14px;">Ningún producto coincide con la búsqueda.</td></tr>'; return; }
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="9" class="muted" style="text-align:center;padding:28px 16px;font-size:14px;">Ningún producto coincide con la búsqueda.</td></tr>'; return; }
   tbody.innerHTML = list.map(product => {
-    const stock = state.inventory.find(item => item.id === product.inventoryId), cost = Number(product.cost || 0), profit = Number(product.price || 0) - cost, margin = cost ? profit / cost * 100 : 0;
+    const stock = state.inventory.find(item => item.id === product.inventoryId), cost = Number(product.cost || 0), profit = Number(product.price || 0) - cost, margin = cost ? profit / cost * 100 : 0, netMargin = Number(product.price || 0) > 0 ? profit / Number(product.price) * 100 : null;
     const last = product.lastCost !== undefined && Math.round(product.lastCost) !== Math.round(cost) ? `<br><small class="muted">Última compra ${money.format(product.lastCost)}</small>` : '';
-    return `<tr><td><strong>${escapeHtml(product.name)}</strong></td><td>${escapeHtml(product.category || 'Sin categoría')}</td><td>${money.format(cost)}${last}</td><td><strong>${money.format(product.price)}</strong></td><td><strong>${money.format(profit)}</strong></td><td>${cost ? `${margin.toFixed(1)}%` : '<span class="muted">—</span>'}</td><td>${stock ? `${formatQty(stock.qty)} ${escapeHtml(stock.unit)}` : '<span class="muted">Sin stock</span>'}</td><td><div class="product-actions"><button class="mini-action" data-edit-product="${product.id}">Editar</button><button class="mini-action delete-action" data-delete-product="${product.id}">Eliminar</button></div></td></tr>`;
+    return `<tr><td><strong>${escapeHtml(product.name)}</strong></td><td>${escapeHtml(product.category || 'Sin categoría')}</td><td>${money.format(cost)}${last}</td><td><strong>${money.format(product.price)}</strong></td><td><strong>${money.format(profit)}</strong></td><td>${cost ? `${margin.toFixed(1)}%` : '<span class="muted">—</span>'}</td><td><strong>${netMargin === null ? '<span class="muted">—</span>' : `${netMargin.toFixed(1)}%`}</strong></td><td>${stock ? `${formatQty(stock.qty)} ${escapeHtml(stock.unit)}` : '<span class="muted">Sin stock</span>'}</td><td><div class="product-actions"><button class="mini-action" data-edit-product="${product.id}">Editar</button><button class="mini-action delete-action" data-delete-product="${product.id}">Eliminar</button></div></td></tr>`;
   }).join('');
 }
 globalThis.renderProducts = renderProducts;
