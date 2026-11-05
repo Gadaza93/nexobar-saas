@@ -1,4 +1,4 @@
-const CACHE = 'nexobar-pos-v50';
+const CACHE = 'nexobar-pos-v51';
 const ASSETS = [
   './',
   './index.html',
@@ -17,6 +17,7 @@ const ASSETS = [
   './app.js',
   './manifest.webmanifest',
   './logo.png',
+  './brand-mark.svg',
   './icon-192.png',
   './icon-512.png'
 ];

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="NexoBar">
+  <!-- Marca NexoBar: «N» de tres piezas en degradado naranja, sin fondo (lo pone el contenedor .brand-mark) -->
+  <defs>
+    <linearGradient id="nbIzq" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF8C32"/>
+      <stop offset="1" stop-color="#E2481B"/>
+    </linearGradient>
+    <linearGradient id="nbDiag" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#B8380F"/>
+      <stop offset="1" stop-color="#F06A1F"/>
+    </linearGradient>
+    <linearGradient id="nbDer" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#FF8C32"/>
+      <stop offset="1" stop-color="#FFC25C"/>
+    </linearGradient>
+    <radialGradient id="nbBrillo" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#FF8C32" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#FF8C32" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="60" cy="60" r="52" fill="url(#nbBrillo)"/>
+  <!-- Pierna izquierda, corte en diagonal arriba -->
+  <path d="M28 36 L46 26 L46 94 L28 94 Z" fill="url(#nbIzq)"/>
+  <!-- Diagonal (queda detrás de la pierna derecha, con sombra para dar profundidad) -->
+  <path d="M46 26 L92 78 L74 94 L46 62 Z" fill="url(#nbDiag)"/>
+  <!-- Pierna derecha, corte en diagonal abajo -->
+  <path d="M74 26 L92 26 L92 84 L74 94 Z" fill="url(#nbDer)"/>
+</svg>
