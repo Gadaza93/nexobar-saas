@@ -532,13 +532,30 @@ function deleteSupplier(id) {
 }
 
 /* Productos: costo promedio ponderado (ya no solo el último costo). */
+// Buscador y filtros de Productos e Inventario (solo en memoria: se reinician al recargar)
+const catalogFilter = { products: { q: '', cat: '' }, inventory: { q: '', cat: '', status: '' } };
+function searchKey(text) { return String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+// Todas las palabras buscadas deben aparecer (sin tildes ni mayúsculas): «aguila light» encuentra «Cerveza Águila Light»
+function matchesSearch(text, q) { const words = searchKey(q).split(/\s+/).filter(Boolean); if (!words.length) return true; const key = searchKey(text); return words.every(w => key.includes(w)); }
+function catalogCategories() { return [...new Set([...(state.categories || []), ...(state.products || []).map(p => p.category || 'Sin categoría')])].filter(c => c && c !== 'Todos').sort((a, b) => a.localeCompare(b, 'es')); }
+function fillCategoryFilter(selector, current) {
+  const el = document.querySelector(selector); if (!el) return '';
+  const cats = catalogCategories(), value = cats.includes(current) ? current : '';
+  el.innerHTML = '<option value="">Todas las categorías</option>' + cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  el.value = value; return value;
+}
+function setCatalogCount(selector, shown, total, noun) { const el = document.querySelector(selector); if (el) el.textContent = shown === total ? `${total} ${noun}` : `${shown} de ${total} ${noun}`; }
 function renderProducts() {
   const tbody = document.querySelector('#productsTable');
   if (!state.products || state.products.length === 0) {
     tbody.innerHTML = '<tr><td colspan="8" class="muted" style="text-align:center;padding:36px 16px;font-size:14px;">No hay productos registrados. Crea uno nuevo o importa tu archivo Excel.</td></tr>';
     return;
   }
-  tbody.innerHTML = state.products.map(product => {
+  const f = catalogFilter.products; f.cat = fillCategoryFilter('#productCategoryFilter', f.cat);
+  const list = state.products.filter(p => (!f.cat || (p.category || 'Sin categoría') === f.cat) && matchesSearch(`${p.name} ${p.category || ''}`, f.q));
+  setCatalogCount('#productCount', list.length, state.products.length, 'productos');
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" class="muted" style="text-align:center;padding:28px 16px;font-size:14px;">Ningún producto coincide con la búsqueda.</td></tr>'; return; }
+  tbody.innerHTML = list.map(product => {
     const stock = state.inventory.find(item => item.id === product.inventoryId), cost = Number(product.cost || 0), profit = Number(product.price || 0) - cost, margin = cost ? profit / cost * 100 : 0;
     const last = product.lastCost !== undefined && Math.round(product.lastCost) !== Math.round(cost) ? `<br><small class="muted">Última compra ${money.format(product.lastCost)}</small>` : '';
     return `<tr><td><strong>${escapeHtml(product.name)}</strong></td><td>${escapeHtml(product.category || 'Sin categoría')}</td><td>${money.format(cost)}${last}</td><td><strong>${money.format(product.price)}</strong></td><td><strong>${money.format(profit)}</strong></td><td>${cost ? `${margin.toFixed(1)}%` : '<span class="muted">—</span>'}</td><td>${stock ? `${formatQty(stock.qty)} ${escapeHtml(stock.unit)}` : '<span class="muted">Sin stock</span>'}</td><td><div class="product-actions"><button class="mini-action" data-edit-product="${product.id}">Editar</button><button class="mini-action delete-action" data-delete-product="${product.id}">Eliminar</button></div></td></tr>`;
@@ -1437,6 +1454,8 @@ function handleModuleInput(event) {
   if (t.dataset.invTender !== undefined && invoiceDraft) { const tender = invoiceDraft.tenders[Number(t.dataset.invTender)]; if (tender && t.dataset.invTenderField === 'amount') { tender.amount = moneyInputValue(t.value); renderInvoiceTendersStatus(); } }
   if (t.id === 'wasteQty') updateWasteValue(); if (t.dataset.countItem !== undefined) updateCountTotals();
   if (t.id === 'invoiceSearch') { invoiceFilter.q = t.value; renderInvoices(); }
+  if (t.id === 'productSearch') { catalogFilter.products.q = t.value; renderProducts(); }
+  if (t.id === 'inventorySearch') { catalogFilter.inventory.q = t.value; renderInventory(); }
 }
 function handleModuleChange(event) {
   const t = event.target;
@@ -1447,6 +1466,9 @@ function handleModuleChange(event) {
   if (t.id === 'invoiceDate') { invoiceFilter.date = t.value || 'all'; renderInvoices(); globalThis.asegurarHistorial?.(t.value || '').then(n => { if (n) renderInvoices(); }); }
   if ((t.id === 'netFrom' || t.id === 'netTo') && t.value) { if (t.id === 'netFrom') netFrom = t.value; else netTo = t.value; netRange = 'custom'; renderNetProfit(); globalThis.asegurarHistorial?.(netBounds().from).then(n => { if (n) renderNetProfit(); }); }
   if (t.id === 'invoiceMethod') { invoiceFilter.method = t.value; renderInvoices(); }
+  if (t.id === 'productCategoryFilter') { catalogFilter.products.cat = t.value; renderProducts(); }
+  if (t.id === 'inventoryCategoryFilter') { catalogFilter.inventory.cat = t.value; renderInventory(); }
+  if (t.id === 'inventoryStatusFilter') { catalogFilter.inventory.status = t.value; renderInventory(); }
   if (t.id === 'backupOnClose' || t.id === 'backupDaily') { if (!can('backup')) { renderBackupCard(); return deny(); } const s = backupSettings(); s[t.id === 'backupOnClose' ? 'onClose' : 'daily'] = t.checked; saveState(); showToast('Preferencia de respaldo guardada.'); }
 }
 function handleLoginKeys(event) {
