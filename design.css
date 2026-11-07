@@ -1672,3 +1672,7 @@ html.is-booting body::after { content: ''; position: fixed; top: 50%; left: 50%;
 #brandLabel em, .login-brand em { font-style: normal; color: var(--accent); }
 .brand-mark:has(img[src$=".svg"]) { background: radial-gradient(circle at 50% 38%, #1F222B 0%, #14161C 70%); padding: 6px; grid-template: 100% / 100%; }
 .brand-mark img[src$=".svg"] { width: 100%; height: 100%; min-width: 0; min-height: 0; }
+
+/* Toques en celulares: sin la espera ni el zoom del «doble toque» de Safari en iPhone (en el teclado del PIN, dos
+   toques seguidos se tomaban como zoom y la pantalla se sentía lenta y trabada) */
+button, a, [role="button"], select, label { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
