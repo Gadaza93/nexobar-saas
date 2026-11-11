@@ -1,4 +1,4 @@
-const CACHE = 'nexobar-pos-v54';
+const CACHE = 'nexobar-pos-v55';
 const ASSETS = [
   './',
   './index.html',
